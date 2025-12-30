@@ -3,7 +3,8 @@ import { Op } from 'sequelize';
 import { sequelize } from '../config/database.js';
 import Profile from '../models/Profile.js';
 import User from '../models/User.js';
-import { protect, streamer, admin } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
+import { streamer, admin } from '../middleware/auth.js';
 import { detectLocation } from '../utils/locationDetector.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
@@ -203,10 +204,7 @@ router.get('/:id', protect, async (req, res) => {
       attributes: ['id', 'email', 'userType', 'credits', 'isActive'],
     });
 
-    // Increment profile views (handle if profileViews is null)
-    if (profile.profileViews === null || profile.profileViews === undefined) {
-      profile.profileViews = 0;
-    }
+    // Increment profile views
     profile.profileViews += 1;
     await profile.save();
 
