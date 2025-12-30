@@ -1,4 +1,5 @@
 import express from 'express';
+import { Op } from 'sequelize';
 import Notification from '../models/Notification.js';
 import { protect } from '../middleware/auth.js';
 
@@ -10,22 +11,25 @@ const router = express.Router();
 router.get('/', protect, async (req, res) => {
   try {
     const { limit = 50, page = 1, unreadOnly } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    const query = { userId: req.user._id };
+    const whereClause = { userId: req.user.id };
     if (unreadOnly === 'true') {
-      query.isRead = false;
+      whereClause.isRead = false;
     }
 
-    const notifications = await Notification.find(query)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(skip);
+    const { count, rows: notifications } = await Notification.findAndCountAll({
+      where: whereClause,
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset,
+    });
 
-    const total = await Notification.countDocuments(query);
-    const unreadCount = await Notification.countDocuments({
-      userId: req.user._id,
-      isRead: false,
+    const unreadCount = await Notification.count({
+      where: {
+        userId: req.user.id,
+        isRead: false,
+      },
     });
 
     res.json({
@@ -34,13 +38,43 @@ router.get('/', protect, async (req, res) => {
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit)),
+        total: count,
+        pages: Math.ceil(count / parseInt(limit)),
       },
     });
   } catch (error) {
     console.error('Get notifications error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/notifications
+// @desc    Create a notification
+// @access  Private
+router.post('/', protect, async (req, res) => {
+  try {
+    const { receiverId, type, title, message, relatedId, relatedType } = req.body;
+
+    if (!receiverId || !type || !title || !message) {
+      return res.status(400).json({ 
+        message: 'receiverId, type, title, and message are required' 
+      });
+    }
+
+    const notification = await Notification.create({
+      userId: receiverId,
+      type,
+      title,
+      message,
+      relatedId: relatedId || null,
+      relatedType: relatedType || null,
+      isRead: false,
+    });
+
+    res.status(201).json(notification);
+  } catch (error) {
+    console.error('Create notification error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
@@ -50,8 +84,10 @@ router.get('/', protect, async (req, res) => {
 router.put('/:id/read', protect, async (req, res) => {
   try {
     const notification = await Notification.findOne({
-      _id: req.params.id,
-      userId: req.user._id,
+      where: {
+        id: req.params.id,
+        userId: req.user.id,
+      },
     });
 
     if (!notification) {
@@ -74,9 +110,14 @@ router.put('/:id/read', protect, async (req, res) => {
 // @access  Private
 router.put('/read-all', protect, async (req, res) => {
   try {
-    await Notification.updateMany(
-      { userId: req.user._id, isRead: false },
-      { isRead: true, readAt: new Date() }
+    await Notification.update(
+      { isRead: true, readAt: new Date() },
+      {
+        where: {
+          userId: req.user.id,
+          isRead: false,
+        },
+      }
     );
 
     res.json({ message: 'All notifications marked as read' });
@@ -87,4 +128,5 @@ router.put('/read-all', protect, async (req, res) => {
 });
 
 export default router;
+
 

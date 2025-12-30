@@ -42,10 +42,23 @@ router.post(
 
       const { email, password, firstName, lastName, age, gender, userType } = req.body;
 
-      // Check if user exists
-      const userExists = await User.findOne({ where: { email } });
+      // Normalize email to lowercase for case-insensitive check
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Check if user with this email already exists (case-insensitive)
+      const userExists = await User.findOne({ 
+        where: { 
+          email: {
+            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
+          }
+        } 
+      });
+      
       if (userExists) {
-        return res.status(400).json({ message: 'User already exists' });
+        return res.status(400).json({ 
+          message: 'Email address already registered',
+          field: 'email'
+        });
       }
 
       // Age restriction
@@ -53,9 +66,9 @@ router.post(
         return res.status(400).json({ message: 'Must be 18 or older to register' });
       }
 
-      // Create user
+      // Create user with normalized email (lowercase)
       const user = await User.create({
-        email,
+        email: normalizedEmail, // Use normalized email to ensure consistency
         password,
         userType: userType || 'regular',
       });
@@ -73,6 +86,8 @@ router.post(
           age,
           gender,
           location,
+          // Mark as chat ready - they'll be registered when they first open chat or when someone chats with them
+          chatRegisteredAt: new Date(), // Pre-mark as registered so they can chat immediately
         },
         {
           returning: true,
@@ -102,6 +117,59 @@ router.post(
   }
 );
 
+// @route   POST /api/auth/check-email
+// @desc    Check if email already exists
+// @access  Public
+router.post(
+  '/check-email',
+  [body('email').isEmail().normalizeEmail()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+          exists: false,
+          message: 'Invalid email format',
+          errors: errors.array() 
+        });
+      }
+
+      const { email } = req.body;
+      
+      // Normalize email to lowercase for case-insensitive check
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Check if user with this email already exists (case-insensitive)
+      const userExists = await User.findOne({ 
+        where: { 
+          email: {
+            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
+          }
+        } 
+      });
+
+      if (userExists) {
+        return res.status(200).json({ 
+          exists: true,
+          message: 'Email address already registered'
+        });
+      }
+
+      return res.status(200).json({ 
+        exists: false,
+        message: 'Email is available'
+      });
+    } catch (error) {
+      console.error('Check email error:', error);
+      res.status(500).json({ 
+        exists: false,
+        message: 'Server error', 
+        error: error.message 
+      });
+    }
+  }
+);
+
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
@@ -117,8 +185,17 @@ router.post(
 
       const { email, password } = req.body;
 
-      // Check for user
-      const user = await User.findOne({ where: { email } });
+      // Normalize email to lowercase for case-insensitive check
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Check for user (case-insensitive email search)
+      const user = await User.findOne({ 
+        where: { 
+          email: {
+            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
+          }
+        } 
+      });
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }

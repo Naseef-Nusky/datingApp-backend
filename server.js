@@ -22,6 +22,7 @@ import notificationRoutes from './routes/notifications.js';
 import safetyRoutes from './routes/safety.js';
 import streamerRoutes from './routes/streamer.js';
 import userStatusRoutes from './routes/userStatus.js';
+import agoraRoutes from './routes/agora.js';
 
 dotenv.config();
 
@@ -31,7 +32,11 @@ const io = new SocketServer(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     methods: ['GET', 'POST'],
+    credentials: true,
   },
+  pingTimeout: 60000, // 60 seconds
+  pingInterval: 25000, // 25 seconds
+  transports: ['websocket', 'polling'],
 });
 
 const PORT = process.env.PORT || 5000;
@@ -78,20 +83,29 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/safety', safetyRoutes);
 app.use('/api/streamer', streamerRoutes);
 app.use('/api/user', userStatusRoutes);
+app.use('/api/agora', agoraRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('✅ User connected:', socket.id);
 
   socket.on('join-room', (userId) => {
-    socket.join(`user-${userId}`);
+    const roomName = `user-${userId}`;
+    socket.join(roomName);
+    console.log(`📢 User ${userId} joined room: ${roomName}`);
   });
 
   socket.on('call-request', (data) => {
-    io.to(`user-${data.receiverId}`).emit('incoming-call', {
+    console.log('📞 Call request received:', data);
+    const roomName = `user-${data.receiverId}`;
+    console.log(`📤 Sending incoming-call to room: ${roomName}`);
+    
+    io.to(roomName).emit('incoming-call', {
       callerId: data.callerId,
       callType: data.callType, // 'video' or 'voice'
     });
+    
+    console.log(`✅ Incoming-call event emitted to room: ${roomName}`);
   });
 
   socket.on('call-accept', (data) => {

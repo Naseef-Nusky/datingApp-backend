@@ -3,24 +3,16 @@ import { Op } from 'sequelize';
 import { sequelize } from '../config/database.js';
 import Profile from '../models/Profile.js';
 import User from '../models/User.js';
-import { protect } from '../middleware/auth.js';
-import { streamer, admin } from '../middleware/auth.js';
+import { protect, streamer, admin } from '../middleware/auth.js';
 import { detectLocation } from '../utils/locationDetector.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
+import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 
 const router = express.Router();
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const ext = file.originalname.split('.').pop();
-    cb(null, `${uuidv4()}.${ext}`);
-  },
-});
+// Configure multer for memory storage (we'll upload directly to Spaces)
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -211,7 +203,10 @@ router.get('/:id', protect, async (req, res) => {
       attributes: ['id', 'email', 'userType', 'credits', 'isActive'],
     });
 
-    // Increment profile views
+    // Increment profile views (handle if profileViews is null)
+    if (profile.profileViews === null || profile.profileViews === undefined) {
+      profile.profileViews = 0;
+    }
     profile.profileViews += 1;
     await profile.save();
 
@@ -274,7 +269,7 @@ router.put('/me', protect, async (req, res) => {
 });
 
 // @route   POST /api/profiles/me/photos
-// @desc    Upload profile photo
+// @desc    Upload/Update main profile photo (replaces first photo)
 // @access  Private
 router.post('/me/photos', protect, upload.single('photo'), async (req, res) => {
   try {
@@ -287,24 +282,122 @@ router.post('/me/photos', protect, upload.single('photo'), async (req, res) => {
       return res.status(404).json({ message: 'Profile not found' });
     }
 
-    const photoUrl = `/uploads/${req.file.filename}`;
+    // Step 1: Upload to DigitalOcean Spaces
+    console.log('Uploading photo to DigitalOcean Spaces...');
+    const photoUrl = await uploadToSpaces(
+      req.file.buffer,
+      req.file.mimetype,
+      'profiles/photos',
+      req.file.originalname
+    );
+    console.log('Photo uploaded to Spaces:', photoUrl);
+
+    // Step 2: Save URL to database (replace first photo or add if none exists)
+    console.log('Saving photo URL to database...');
     const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
-    photos.push({
+    
+    // Delete old first photo from Spaces if it exists
+    if (photos.length > 0 && photos[0]?.url && photos[0].url.includes('digitaloceanspaces.com')) {
+      try {
+        console.log('Deleting old profile photo from Spaces...');
+        await deleteFromSpaces(photos[0].url);
+        console.log('Old profile photo deleted from Spaces');
+      } catch (deleteError) {
+        console.error('Error deleting old profile photo:', deleteError);
+        // Continue even if deletion fails
+      }
+    }
+    
+    // Replace first photo (index 0) with new photo
+    const newPhoto = {
       url: photoUrl,
       isPublic: true,
-    });
+      uploadedAt: new Date().toISOString(),
+    };
+    
+    if (photos.length > 0) {
+      photos[0] = newPhoto; // Replace first photo
+    } else {
+      photos.push(newPhoto); // Add as first photo if array is empty
+    }
 
     await profile.update({ photos });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
+    
+    // Ensure photos is an array and properly formatted
+    const updatedPhotos = Array.isArray(profile.photos) ? profile.photos : [];
+    console.log('Photo URL saved to database successfully');
+    console.log('Updated photos array:', JSON.stringify(updatedPhotos, null, 2));
 
-    res.json({ message: 'Photo uploaded successfully', photo: { url: photoUrl }, photos });
+    res.json({ 
+      message: 'Photo uploaded successfully to DigitalOcean Spaces and saved to database', 
+      photo: { url: photoUrl }, 
+      photos: updatedPhotos // Return the updated photos from the database
+    });
   } catch (error) {
     console.error('Upload photo error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
+// @route   POST /api/profiles/me/photos/add
+// @desc    Add additional profile photo (appends to photos array, doesn't replace first)
+// @access  Private
+router.post('/me/photos/add', protect, upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    // Step 1: Upload to DigitalOcean Spaces
+    console.log('Uploading additional photo to DigitalOcean Spaces...');
+    const photoUrl = await uploadToSpaces(
+      req.file.buffer,
+      req.file.mimetype,
+      'profiles/photos',
+      req.file.originalname
+    );
+    console.log('Additional photo uploaded to Spaces:', photoUrl);
+
+    // Step 2: Add to photos array (don't replace first photo)
+    console.log('Adding photo URL to database...');
+    const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+    photos.push({
+      url: photoUrl,
+      isPublic: true,
+      uploadedAt: new Date().toISOString(),
+    });
+
+    await profile.update({ photos });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
+    
+    // Ensure photos is an array and properly formatted
+    const updatedPhotos = Array.isArray(profile.photos) ? profile.photos : [];
+    console.log('Additional photo saved to database successfully');
+    console.log('Updated photos array:', JSON.stringify(updatedPhotos, null, 2));
+
+    res.json({ 
+      message: 'Photo added successfully to DigitalOcean Spaces and saved to database', 
+      photo: { url: photoUrl }, 
+      photos: updatedPhotos
+    });
+  } catch (error) {
+    console.error('Add photo error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   POST /api/profiles/me/cover-photo
-// @desc    Upload cover photo
+// @desc    Upload cover photo to DigitalOcean Spaces
 // @access  Private
 router.post('/me/cover-photo', protect, upload.single('coverPhoto'), async (req, res) => {
   try {
@@ -317,10 +410,40 @@ router.post('/me/cover-photo', protect, upload.single('coverPhoto'), async (req,
       return res.status(404).json({ message: 'Profile not found' });
     }
 
-    const coverPhotoUrl = `/uploads/${req.file.filename}`;
-    await profile.update({ coverPhoto: coverPhotoUrl });
+    // Delete old cover photo from Spaces if exists
+    if (profile.coverPhoto && profile.coverPhoto.includes('digitaloceanspaces.com')) {
+      try {
+        console.log('Deleting old cover photo from Spaces...');
+        await deleteFromSpaces(profile.coverPhoto);
+        console.log('Old cover photo deleted from Spaces');
+      } catch (deleteError) {
+        console.error('Error deleting old cover photo:', deleteError);
+        // Continue even if deletion fails
+      }
+    }
 
-    res.json({ message: 'Cover photo uploaded successfully', coverPhoto: coverPhotoUrl });
+    // Step 1: Upload to DigitalOcean Spaces
+    console.log('Uploading cover photo to DigitalOcean Spaces...');
+    const coverPhotoUrl = await uploadToSpaces(
+      req.file.buffer,
+      req.file.mimetype,
+      'profiles/cover-photos',
+      req.file.originalname
+    );
+    console.log('Cover photo uploaded to Spaces:', coverPhotoUrl);
+
+    // Step 2: Save URL to database
+    console.log('Saving cover photo URL to database...');
+    await profile.update({ coverPhoto: coverPhotoUrl });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
+    console.log('Cover photo URL saved to database successfully');
+
+    res.json({ 
+      message: 'Cover photo uploaded successfully to DigitalOcean Spaces and saved to database', 
+      coverPhoto: profile.coverPhoto // Return the updated cover photo from the database
+    });
   } catch (error) {
     console.error('Upload cover photo error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -328,7 +451,7 @@ router.post('/me/cover-photo', protect, upload.single('coverPhoto'), async (req,
 });
 
 // @route   DELETE /api/profiles/me/photos/:photoIndex
-// @desc    Delete a profile photo
+// @desc    Delete a profile photo from DigitalOcean Spaces
 // @access  Private
 router.delete('/me/photos/:photoIndex', protect, async (req, res) => {
   try {
@@ -344,10 +467,27 @@ router.delete('/me/photos/:photoIndex', protect, async (req, res) => {
       return res.status(400).json({ message: 'Invalid photo index' });
     }
 
+    // Delete photo from DigitalOcean Spaces if it's a Spaces URL
+    const photoToDelete = photos[photoIndex];
+    if (photoToDelete?.url && photoToDelete.url.includes('digitaloceanspaces.com')) {
+      try {
+        await deleteFromSpaces(photoToDelete.url);
+      } catch (deleteError) {
+        console.error('Error deleting photo from Spaces:', deleteError);
+        // Continue even if deletion fails
+      }
+    }
+
     photos.splice(photoIndex, 1);
     await profile.update({ photos });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
 
-    res.json({ message: 'Photo deleted successfully', photos });
+    res.json({ 
+      message: 'Photo deleted successfully', 
+      photos: profile.photos // Return the updated photos from the database
+    });
   } catch (error) {
     console.error('Delete photo error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });

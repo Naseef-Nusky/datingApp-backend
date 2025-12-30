@@ -1,7 +1,6 @@
 import express from 'express';
 import Profile from '../models/Profile.js';
-import { protect, streamer } from '../middleware/auth.js';
-import { admin } from '../middleware/auth.js';
+import { protect, streamer, admin } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -91,4 +90,8 @@ router.put('/payout-request/:requestId/approve', protect, admin, async (req, res
 });
 
 export default router;
+
+
+
+
 

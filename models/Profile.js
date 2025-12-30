@@ -98,6 +98,11 @@ const Profile = sequelize.define(
       type: DataTypes.JSONB,
       defaultValue: [],
     },
+    chatRegisteredAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: null,
+    },
     todayStatus: {
       type: DataTypes.ENUM('serious', 'penpal', 'romantic', 'flirty', 'naughty'),
       allowNull: true,

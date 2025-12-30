@@ -25,7 +25,8 @@ const Notification = sequelize.define(
         'gift_received',
         'profile_view',
         'story_reaction',
-        'system'
+        'system',
+        'chat_registration_required'
       ),
       allowNull: false,
     },

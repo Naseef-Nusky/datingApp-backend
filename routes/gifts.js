@@ -38,17 +38,11 @@ router.post('/send', protect, async (req, res) => {
       return res.status(404).json({ message: 'Gift not found' });
     }
 
+    // Credit check removed - gifts are now free
     const user = await User.findById(req.user._id);
-    if (user.credits < giftItem.creditCost) {
-      return res.status(400).json({ message: 'Insufficient credits' });
-    }
 
     // Determine gift type
     const giftType = giftItem.type === 'virtual' ? 'virtual' : 'physical';
-
-    // Deduct credits
-    user.credits -= giftItem.creditCost;
-    await user.save();
 
     // Create gift
     const gift = await Gift.create({
@@ -58,29 +52,12 @@ router.post('/send', protect, async (req, res) => {
       giftItem: giftId,
       message,
       deliveryAddress: giftType === 'physical' ? deliveryAddress : undefined,
-      creditsUsed: giftItem.creditCost,
+      creditsUsed: 0, // Gifts are now free
     });
 
-    // Record transaction
-    await CreditTransaction.create({
-      userId: req.user._id,
-      type: 'usage',
-      amount: -giftItem.creditCost,
-      description: `Gift: ${giftItem.name}`,
-      relatedTo: 'gift',
-      relatedId: gift._id,
-    });
+    // Credit transaction removed - gifts are now free
 
-    // If receiver is a streamer/talent, add to earnings
-    const receiver = await User.findById(receiverId);
-    if (receiver && (receiver.userType === 'streamer' || receiver.userType === 'talent')) {
-      const receiverProfile = await Profile.findOne({ userId: receiverId });
-      if (receiverProfile) {
-        receiverProfile.earnings.total += giftItem.creditCost * 0.7; // 70% to streamer
-        receiverProfile.earnings.fromGifts += giftItem.creditCost * 0.7;
-        await receiverProfile.save();
-      }
-    }
+    // Earnings removed - gifts are now free
 
     // Create notification
     await Notification.create({
@@ -134,4 +111,7 @@ router.get('/sent', protect, async (req, res) => {
 });
 
 export default router;
+
+
+
 
