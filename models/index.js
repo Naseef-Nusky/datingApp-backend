@@ -5,6 +5,7 @@ import Match from './Match.js';
 import Chat from './Chat.js';
 import Message from './Message.js';
 import ChatRequest from './ChatRequest.js';
+import CallRequest from './CallRequest.js';
 import Story from './Story.js';
 import Gift from './Gift.js';
 import GiftCatalog from './GiftCatalog.js';
@@ -34,6 +35,10 @@ Message.belongsTo(User, { foreignKey: 'receiver', as: 'receiverData' });
 // ChatRequest associations
 ChatRequest.belongsTo(User, { foreignKey: 'senderId', as: 'senderData' });
 ChatRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiverData' });
+
+// CallRequest associations
+CallRequest.belongsTo(User, { foreignKey: 'callerId', as: 'callerData' });
+CallRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiverData' });
 
 // Story associations
 Story.belongsTo(User, { foreignKey: 'userId', as: 'user' });
@@ -65,6 +70,7 @@ export {
   Chat,
   Message,
   ChatRequest,
+  CallRequest,
   Story,
   Gift,
   GiftCatalog,

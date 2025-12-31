@@ -9,6 +9,9 @@ import connectDB from './config/database.js';
 
 // Import models FIRST to register them with Sequelize
 import './models/index.js';
+import CallRequest from './models/CallRequest.js';
+import Notification from './models/Notification.js';
+import { Op } from 'sequelize';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -75,7 +78,11 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/matches', matchRoutes);
-app.use('/api/messages', messageRoutes);
+// Pass io instance to message routes for real-time updates
+app.use('/api/messages', (req, res, next) => {
+  req.io = io;
+  next();
+}, messageRoutes);
 app.use('/api/stories', storyRoutes);
 app.use('/api/gifts', giftRoutes);
 app.use('/api/credits', creditRoutes);
@@ -86,48 +93,481 @@ app.use('/api/user', userStatusRoutes);
 app.use('/api/agora', agoraRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
+// Store user IDs with socket connections
+const socketUserMap = new Map(); // socket.id -> userId
+
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
 
   socket.on('join-room', (userId) => {
-    const roomName = `user-${userId}`;
+    // Ensure userId is converted to string for consistent room naming
+    const userIdStr = String(userId);
+    const roomName = `user-${userIdStr}`;
     socket.join(roomName);
-    console.log(`📢 User ${userId} joined room: ${roomName}`);
+    // Store userId with socket
+    socketUserMap.set(socket.id, userIdStr);
+    console.log(`📢 [SERVER] User ${userIdStr} joined room: ${roomName} (socket: ${socket.id})`);
+    
+    // Debug: Check room size
+    io.in(roomName).fetchSockets().then(sockets => {
+      console.log(`🔍 [SERVER] Room ${roomName} now has ${sockets.length} socket(s)`);
+      sockets.forEach(s => {
+        const socketUserId = socketUserMap.get(s.id);
+        console.log(`   - Socket ${s.id} (User: ${socketUserId || 'unknown'})`);
+      });
+    });
   });
 
-  socket.on('call-request', (data) => {
-    console.log('📞 Call request received:', data);
-    const roomName = `user-${data.receiverId}`;
-    console.log(`📤 Sending incoming-call to room: ${roomName}`);
+  socket.on('call-request', async (data) => {
+    console.log('📞 [SERVER] Call request received:', data);
+    console.log('📞 [SERVER] Caller ID:', data.callerId);
+    console.log('📞 [SERVER] Receiver ID:', data.receiverId);
+    console.log('📞 [SERVER] Call Type:', data.callType);
+    console.log('📞 [SERVER] Channel Name:', data.channelName);
     
-    io.to(roomName).emit('incoming-call', {
-      callerId: data.callerId,
+    // Ensure receiverId is converted to string for consistent room naming
+    const receiverId = String(data.receiverId);
+    const callerId = String(data.callerId);
+    const roomName = `user-${receiverId}`;
+    
+    console.log(`🔍 [SERVER] Looking for receiver in room: ${roomName}`);
+    
+    // Check if receiver is in the room
+    const socketsInRoom = await io.in(roomName).fetchSockets();
+    console.log(`📤 [SERVER] Room ${roomName} has ${socketsInRoom.length} socket(s)`);
+    
+    // Create call request in database (for missed call tracking)
+    let callRequestId = null;
+    let missedCallTimeout = null;
+    try {
+      const callRequest = await CallRequest.create({
+        callerId: callerId,
+        receiverId: receiverId,
+        callType: data.callType,
+        status: 'pending',
+      });
+      callRequestId = callRequest.id;
+      console.log(`✅ [SERVER] Call request created in database: ${callRequestId}`);
+      
+      // Store timeout reference in socket data so we can clear it later
+      socket.data.callRequestTimeouts = socket.data.callRequestTimeouts || new Map();
+      
+      // Set timeout to mark as missed if not answered within 60 seconds
+      missedCallTimeout = setTimeout(async () => {
+        try {
+          const request = await CallRequest.findByPk(callRequestId);
+          if (request && request.status === 'pending') {
+            await request.update({ status: 'missed' });
+            console.log(`⏰ [SERVER] Call request ${callRequestId} marked as missed (timeout)`);
+            
+            // Emit call-request-update event to refresh call request section
+            io.to(roomName).emit('call-request-update', {
+              callRequestId: callRequestId,
+              status: 'missed',
+            });
+            io.to(`user-${callerId}`).emit('call-request-update', {
+              callRequestId: callRequestId,
+              status: 'missed',
+            });
+            
+            // Emit contact-update to refresh contact section
+            io.to(roomName).emit('contact-update', {
+              userId: callerId,
+              action: 'call_missed',
+            });
+            io.to(`user-${callerId}`).emit('contact-update', {
+              userId: receiverId,
+              action: 'call_missed',
+            });
+          }
+        } catch (error) {
+          console.error('Error marking call as missed:', error);
+        } finally {
+          // Clean up timeout reference
+          socket.data.callRequestTimeouts?.delete(callRequestId);
+        }
+      }, 60000); // 60 seconds timeout
+      
+      // Store timeout reference
+      socket.data.callRequestTimeouts.set(callRequestId, missedCallTimeout);
+    } catch (error) {
+      console.error('❌ [SERVER] Error creating call request:', error);
+      // Continue even if database call fails
+    }
+    
+    // Prepare call data (include channelName if provided by caller)
+    const callData = {
+      callerId: callerId,
       callType: data.callType, // 'video' or 'voice'
+      channelName: data.channelName, // Pass channel name to receiver (CRITICAL for same channel)
+      callRequestId: callRequestId, // Include call request ID for status updates
+    };
+    
+    // Emit incoming-call event to receiver's room
+    console.log(`📤 [SERVER] Emitting incoming-call to room: ${roomName}`);
+    io.to(roomName).emit('incoming-call', callData);
+    console.log(`✅ [SERVER] Incoming-call event emitted to room: ${roomName}`);
+    
+    // Fallback: If no sockets in room, try to find receiver's socket directly
+    if (socketsInRoom.length === 0) {
+      console.warn(`⚠️ [SERVER] No sockets found in room ${roomName}. Trying to find receiver's socket directly...`);
+      
+      // Find all connected sockets and check if any belong to the receiver
+      const allSockets = await io.fetchSockets();
+      console.log(`🔍 [SERVER] Total connected sockets: ${allSockets.length}`);
+      let foundReceiver = false;
+      
+      for (const s of allSockets) {
+        const socketUserId = socketUserMap.get(s.id);
+        console.log(`🔍 [SERVER] Checking socket ${s.id} (User: ${socketUserId || 'unknown'})`);
+        if (socketUserId === receiverId) {
+          console.log(`✅ [SERVER] Found receiver's socket directly: ${s.id}`);
+          s.emit('incoming-call', callData);
+          foundReceiver = true;
+          break;
+        }
+      }
+      
+      if (!foundReceiver) {
+        console.error(`❌ [SERVER] Receiver ${receiverId} is not connected. Call notification will not be delivered.`);
+        console.error(`❌ [SERVER] Available users in socketUserMap:`, Array.from(socketUserMap.values()));
+      }
+    } else {
+      // Log all sockets in the room
+      socketsInRoom.forEach(s => {
+        const socketUserId = socketUserMap.get(s.id);
+        console.log(`✅ [SERVER] Socket ${s.id} in room (User: ${socketUserId || 'unknown'})`);
+      });
+    }
+    
+    // Emit contact-update events to refresh contacts and call requests sections
+    // Update receiver's contacts (they received a call)
+    io.to(roomName).emit('contact-update', {
+      userId: callerId,
+      callType: data.callType,
+      action: 'call_requested',
     });
     
-    console.log(`✅ Incoming-call event emitted to room: ${roomName}`);
+    // Update caller's contacts (they initiated a call)
+    const callerRoomName = `user-${callerId}`;
+    io.to(callerRoomName).emit('contact-update', {
+      userId: receiverId,
+      callType: data.callType,
+      action: 'call_requested',
+    });
+    
+    // Emit call-request-update to refresh call request section
+    io.to(roomName).emit('call-request-update', {
+      callRequestId: callRequestId,
+      status: 'pending',
+      callType: data.callType,
+      callerId: callerId,
+    });
+    
+    console.log(`✅ Contact-update and call-request-update events emitted for call request`);
   });
 
-  socket.on('call-accept', (data) => {
-    io.to(`user-${data.callerId}`).emit('call-accepted', {
-      receiverId: data.receiverId,
+  socket.on('call-accept', async (data) => {
+    // Ensure callerId is converted to string for consistent room naming
+    const callerId = String(data.callerId);
+    const receiverId = String(data.receiverId);
+    const roomName = `user-${callerId}`;
+    console.log(`✅ Call accepted, notifying caller in room: ${roomName}`);
+    io.to(roomName).emit('call-accepted', {
+      receiverId: receiverId,
     });
+    
+    // Update call request status to 'accepted' in database
+    try {
+      const callRequest = await CallRequest.findOne({
+        where: {
+          callerId: callerId,
+          receiverId: receiverId,
+          status: 'pending',
+        },
+        order: [['created_at', 'DESC']],
+      });
+      
+      if (callRequest) {
+        await callRequest.update({
+          status: 'accepted',
+          answeredAt: new Date(),
+        });
+        console.log(`✅ [SERVER] Call request ${callRequest.id} marked as accepted`);
+        
+        // Clear missed call timeout if it exists
+        const callerSocket = Array.from(io.sockets.sockets.values()).find(
+          s => socketUserMap.get(s.id) === callerId
+        );
+        if (callerSocket?.data?.callRequestTimeouts) {
+          const timeout = callerSocket.data.callRequestTimeouts.get(callRequest.id);
+          if (timeout) {
+            clearTimeout(timeout);
+            callerSocket.data.callRequestTimeouts.delete(callRequest.id);
+            console.log(`✅ [SERVER] Cleared missed call timeout for call request ${callRequest.id}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error updating call request status:', error);
+    }
+    
+    // Emit contact-update events to refresh contacts and call requests sections
+    // Update caller's contacts
+    io.to(roomName).emit('contact-update', {
+      userId: receiverId,
+      action: 'call_accepted',
+    });
+    
+    // Update receiver's contacts
+    const receiverRoomName = `user-${receiverId}`;
+    io.to(receiverRoomName).emit('contact-update', {
+      userId: callerId,
+      action: 'call_accepted',
+    });
+    
+    // Emit call-request-update to refresh call request section
+    io.to(roomName).emit('call-request-update', {
+      status: 'accepted',
+    });
+    io.to(receiverRoomName).emit('call-request-update', {
+      status: 'accepted',
+    });
+    
+    console.log(`✅ Contact-update and call-request-update events emitted for call accepted`);
   });
 
-  socket.on('call-reject', (data) => {
-    io.to(`user-${data.callerId}`).emit('call-rejected', {
-      receiverId: data.receiverId,
+  socket.on('call-reject', async (data) => {
+    // Ensure callerId is converted to string for consistent room naming
+    const callerId = String(data.callerId);
+    const receiverId = String(data.receiverId);
+    const roomName = `user-${callerId}`;
+    console.log(`❌ Call rejected, notifying caller in room: ${roomName}`);
+    io.to(roomName).emit('call-rejected', {
+      receiverId: receiverId,
     });
+    
+    // Update call request status to 'missed' in database (receiver didn't answer)
+    try {
+      const callRequest = await CallRequest.findOne({
+        where: {
+          callerId: callerId,
+          receiverId: receiverId,
+          status: 'pending',
+        },
+        order: [['created_at', 'DESC']],
+      });
+      
+      if (callRequest) {
+        await callRequest.update({
+          status: 'missed', // Mark as missed instead of rejected for call history
+        });
+        console.log(`✅ [SERVER] Call request ${callRequest.id} marked as missed (rejected by receiver)`);
+        
+        // Clear missed call timeout if it exists
+        const callerSocket = Array.from(io.sockets.sockets.values()).find(
+          s => socketUserMap.get(s.id) === callerId
+        );
+        if (callerSocket?.data?.callRequestTimeouts) {
+          const timeout = callerSocket.data.callRequestTimeouts.get(callRequest.id);
+          if (timeout) {
+            clearTimeout(timeout);
+            callerSocket.data.callRequestTimeouts.delete(callRequest.id);
+            console.log(`✅ [SERVER] Cleared missed call timeout for call request ${callRequest.id}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error updating call request status:', error);
+    }
+    
+    // Emit contact-update events to refresh contacts and call requests sections
+    // Update caller's contacts (call was rejected/not answered)
+    io.to(roomName).emit('contact-update', {
+      userId: receiverId,
+      action: 'call_rejected',
+    });
+    
+    // Update receiver's contacts (they rejected/not answered the call)
+    const receiverRoomName = `user-${receiverId}`;
+    io.to(receiverRoomName).emit('contact-update', {
+      userId: callerId,
+      action: 'call_rejected',
+    });
+    
+    // Emit call-request-update to refresh call request section
+    io.to(roomName).emit('call-request-update', {
+      status: 'rejected',
+    });
+    io.to(receiverRoomName).emit('call-request-update', {
+      status: 'rejected',
+    });
+    
+    console.log(`✅ Contact-update and call-request-update events emitted for call rejected/not answered`);
   });
 
-  socket.on('call-end', (data) => {
-    io.to(`user-${data.otherUserId}`).emit('call-ended', {
-      userId: data.userId,
+  socket.on('call-cancel', async (data) => {
+    // Handle when caller cancels the call before receiver accepts
+    const callerId = String(data.callerId);
+    const receiverId = String(data.receiverId);
+    const receiverRoomName = `user-${receiverId}`;
+    
+    console.log(`❌ [SERVER] Call canceled by caller ${callerId}, notifying receiver ${receiverId}`);
+    
+    // Notify receiver that call was canceled
+    io.to(receiverRoomName).emit('call-cancelled', {
+      callerId: callerId,
     });
+    
+    // Update call request status to 'missed' (caller canceled - receiver never answered)
+    try {
+      const callRequest = await CallRequest.findOne({
+        where: {
+          callerId: callerId,
+          receiverId: receiverId,
+          status: 'pending',
+        },
+        order: [['created_at', 'DESC']],
+      });
+      
+      if (callRequest) {
+        await callRequest.update({
+          status: 'missed', // Mark as missed for call history (caller canceled before receiver answered)
+        });
+        console.log(`✅ [SERVER] Call request ${callRequest.id} marked as missed (caller canceled)`);
+        
+        // Clear missed call timeout if it exists
+        const callerSocket = Array.from(io.sockets.sockets.values()).find(
+          s => socketUserMap.get(s.id) === callerId
+        );
+        if (callerSocket?.data?.callRequestTimeouts) {
+          const timeout = callerSocket.data.callRequestTimeouts.get(callRequest.id);
+          if (timeout) {
+            clearTimeout(timeout);
+            callerSocket.data.callRequestTimeouts.delete(callRequest.id);
+            console.log(`✅ [SERVER] Cleared missed call timeout for call request ${callRequest.id}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error updating call request status:', error);
+    }
+    
+    // Emit contact-update events
+    const callerRoomName = `user-${callerId}`;
+    io.to(callerRoomName).emit('contact-update', {
+      userId: receiverId,
+      action: 'call_cancelled',
+    });
+    
+    io.to(receiverRoomName).emit('contact-update', {
+      userId: callerId,
+      action: 'call_cancelled',
+    });
+    
+    // Emit call-request-update to refresh call request section
+    io.to(callerRoomName).emit('call-request-update', {
+      status: 'cancelled',
+    });
+    io.to(receiverRoomName).emit('call-request-update', {
+      status: 'cancelled',
+    });
+    
+    console.log(`✅ Contact-update and call-request-update events emitted for call canceled`);
+  });
+
+  socket.on('call-end', async (data) => {
+    // Ensure otherUserId is converted to string for consistent room naming
+    const otherUserId = String(data.otherUserId);
+    const userId = String(data.userId);
+    const roomName = `user-${otherUserId}`;
+    console.log(`📴 [SERVER] Call ended, notifying other user in room: ${roomName}`);
+    io.to(roomName).emit('call-ended', {
+      userId: userId,
+    });
+    
+    // Update call request status to 'completed' if it was accepted
+    try {
+      // Try to find the most recent accepted call request between these two users
+      const callRequest = await CallRequest.findOne({
+        where: {
+          [Op.or]: [
+            { callerId: userId, receiverId: otherUserId },
+            { callerId: otherUserId, receiverId: userId },
+          ],
+          status: 'accepted',
+        },
+        order: [['created_at', 'DESC']],
+      });
+      
+      if (callRequest) {
+        // Calculate duration
+        const answeredAt = callRequest.answeredAt ? new Date(callRequest.answeredAt) : new Date(callRequest.createdAt);
+        const duration = data.duration || Math.max(0, Math.floor((new Date() - answeredAt) / 1000));
+        
+        await callRequest.update({
+          status: 'completed',
+          endedAt: new Date(),
+          duration: duration,
+        });
+        console.log(`✅ [SERVER] Call request ${callRequest.id} marked as completed (duration: ${duration}s)`);
+      } else {
+        // If no accepted call found, try to find pending call and mark as missed
+        const pendingCall = await CallRequest.findOne({
+          where: {
+            [Op.or]: [
+              { callerId: userId, receiverId: otherUserId },
+              { callerId: otherUserId, receiverId: userId },
+            ],
+            status: 'pending',
+          },
+          order: [['created_at', 'DESC']],
+        });
+        
+        if (pendingCall) {
+          await pendingCall.update({
+            status: 'missed',
+          });
+          console.log(`✅ [SERVER] Pending call request ${pendingCall.id} marked as missed (call ended before acceptance)`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [SERVER] Error updating call request status on call-end:', error);
+    }
+    
+    // Emit contact-update events to refresh contacts and call requests sections
+    // Update other user's contacts
+    io.to(roomName).emit('contact-update', {
+      userId: userId,
+      action: 'call_ended',
+    });
+    
+    // Update current user's contacts
+    const userRoomName = `user-${userId}`;
+    io.to(userRoomName).emit('contact-update', {
+      userId: otherUserId,
+      action: 'call_ended',
+    });
+    
+    // Emit call-request-update to refresh call request section
+    io.to(roomName).emit('call-request-update', {
+      status: 'completed',
+    });
+    io.to(userRoomName).emit('call-request-update', {
+      status: 'completed',
+    });
+    
+    console.log(`✅ Contact-update and call-request-update events emitted for call ended`);
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    const userId = socketUserMap.get(socket.id);
+    if (userId) {
+      console.log(`👋 User ${userId} disconnected (socket: ${socket.id})`);
+      socketUserMap.delete(socket.id);
+    } else {
+      console.log('👋 User disconnected:', socket.id);
+    }
   });
 });
 

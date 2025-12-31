@@ -3,6 +3,7 @@ import { Op } from 'sequelize';
 import Chat from '../models/Chat.js';
 import Message from '../models/Message.js';
 import ChatRequest from '../models/ChatRequest.js';
+import CallRequest from '../models/CallRequest.js';
 import User from '../models/User.js';
 import Profile from '../models/Profile.js';
 import Match from '../models/Match.js';
@@ -203,6 +204,32 @@ router.post('/', protect, async (req, res) => {
     } catch (notifError) {
       console.error('Error creating notification:', notifError);
       // Non-critical, continue
+    }
+
+    // Emit socket event for real-time message notification
+    if (req.io) {
+      try {
+        const receiverIdStr = String(receiverId);
+        req.io.to(`user-${receiverIdStr}`).emit('new-message', {
+          messageId: message.id,
+          senderId: req.user.id,
+          receiverId: receiverId,
+          content: content,
+          messageType: messageType,
+          chatId: chat?.id || null,
+          createdAt: message.createdAt,
+        });
+        console.log(`📨 Emitted new-message event to user-${receiverIdStr}`);
+        
+        // Also emit contact-update event to refresh contacts list
+        req.io.to(`user-${receiverIdStr}`).emit('contact-update', {
+          userId: req.user.id,
+          chatId: chat?.id || null,
+        });
+      } catch (socketError) {
+        console.error('Error emitting socket event:', socketError);
+        // Non-critical, continue
+      }
     }
 
     // Include chat and user data in response
@@ -825,6 +852,25 @@ router.post('/chat-requests', protect, async (req, res) => {
       // Non-critical, continue
     }
 
+    // Emit socket event for real-time chat request notification
+    if (req.io) {
+      try {
+        const receiverIdStr = String(receiverId);
+        req.io.to(`user-${receiverIdStr}`).emit('new-chat-request', {
+          requestId: chatRequest.id,
+          senderId: req.user.id,
+          receiverId: receiverId,
+          firstMessage: firstMessage,
+          senderData: requestWithSender.senderData,
+          createdAt: chatRequest.createdAt,
+        });
+        console.log(`📬 Emitted new-chat-request event to user-${receiverIdStr}`);
+      } catch (socketError) {
+        console.error('Error emitting socket event:', socketError);
+        // Non-critical, continue
+      }
+    }
+
     res.status(201).json(requestWithSender);
   } catch (error) {
     console.error('Create chat request error:', error);
@@ -948,6 +994,38 @@ router.put('/chat-requests/:requestId/accept', protect, async (req, res) => {
       // Non-critical, continue
     }
 
+    // Emit socket events for real-time updates
+    if (req.io) {
+      try {
+        const senderIdStr = String(chatRequest.senderId);
+        const receiverIdStr = String(chatRequest.receiverId);
+        
+        // Notify sender that their request was accepted
+        req.io.to(`user-${senderIdStr}`).emit('chat-request-accepted', {
+          requestId: chatRequest.id,
+          chatId: chat.id,
+          receiverId: chatRequest.receiverId,
+        });
+        
+        // Notify receiver to update their contacts
+        req.io.to(`user-${receiverIdStr}`).emit('contact-update', {
+          userId: chatRequest.senderId,
+          chatId: chat.id,
+        });
+        
+        // Also notify sender to update their contacts
+        req.io.to(`user-${senderIdStr}`).emit('contact-update', {
+          userId: chatRequest.receiverId,
+          chatId: chat.id,
+        });
+        
+        console.log(`✅ Emitted chat-request-accepted and contact-update events`);
+      } catch (socketError) {
+        console.error('Error emitting socket event:', socketError);
+        // Non-critical, continue
+      }
+    }
+
     res.json({
       message: 'Chat request accepted',
       chatId: chat.id,
@@ -1054,6 +1132,62 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('Upload message file error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/messages/call-requests
+// @desc    Get call requests (missed calls and call history for current user)
+// @access  Private
+router.get('/call-requests', protect, async (req, res) => {
+  try {
+    // Query for call requests where user is involved (as caller or receiver)
+    // Only get statuses that exist in enum: 'pending', 'accepted', 'rejected', 'missed', 'completed'
+    const requests = await CallRequest.findAll({
+      where: {
+        [Op.or]: [
+          { receiverId: req.user.id },
+          { callerId: req.user.id },
+        ],
+        // Only get statuses relevant for contact section: missed calls and completed calls
+        status: { [Op.in]: ['missed', 'completed'] },
+      },
+      include: [
+        {
+          model: User,
+          as: 'callerData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'photos'],
+            },
+          ],
+        },
+        {
+          model: User,
+          as: 'receiverData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'photos'],
+            },
+          ],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+      limit: 100, // Get enough call history
+    });
+
+    console.log(`✅ [API] Found ${requests.length} call requests for user ${req.user.id}`);
+    res.json(requests);
+  } catch (error) {
+    console.error('❌ [API] Get call requests error:', error);
+    console.error('Error details:', error.message);
+    // Return empty array instead of error to prevent frontend crashes
+    res.json([]);
   }
 });
 
