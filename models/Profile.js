@@ -51,6 +51,7 @@ const Profile = sequelize.define(
     coverPhoto: {
       type: DataTypes.STRING,
       allowNull: true,
+      defaultValue: 'defaultCoverImg.jpg',
     },
     location: {
       type: DataTypes.JSONB,
@@ -107,6 +108,12 @@ const Profile = sequelize.define(
       type: DataTypes.ENUM('serious', 'penpal', 'romantic', 'flirty', 'naughty'),
       allowNull: true,
       defaultValue: null,
+    },
+    ringtone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'defaultRingtone.mp3',
+      comment: 'Ringtone file name for incoming calls',
     },
   },
   {
