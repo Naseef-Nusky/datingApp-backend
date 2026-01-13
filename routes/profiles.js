@@ -307,9 +307,11 @@ router.post('/me/photos', protect, upload.single('photo'), async (req, res) => {
     }
     
     // Replace first photo (index 0) with new photo
+    // Get isPublic from request body, default to true if not provided
+    const isPublic = req.body.isPublic !== undefined ? req.body.isPublic === 'true' || req.body.isPublic === true : true;
     const newPhoto = {
       url: photoUrl,
-      isPublic: true,
+      isPublic: isPublic,
       uploadedAt: new Date().toISOString(),
     };
     
@@ -366,10 +368,12 @@ router.post('/me/photos/add', protect, upload.single('photo'), async (req, res) 
 
     // Step 2: Add to photos array (don't replace first photo)
     console.log('Adding photo URL to database...');
+    // Get isPublic from request body, default to true if not provided
+    const isPublic = req.body.isPublic !== undefined ? req.body.isPublic === 'true' || req.body.isPublic === true : true;
     const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
     photos.push({
       url: photoUrl,
-      isPublic: true,
+      isPublic: isPublic,
       uploadedAt: new Date().toISOString(),
     });
 
@@ -444,6 +448,87 @@ router.post('/me/cover-photo', protect, upload.single('coverPhoto'), async (req,
     });
   } catch (error) {
     console.error('Upload cover photo error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/profiles/me/photos/:photoIndex/privacy
+// @desc    Update photo privacy (public/private)
+// @access  Private
+router.put('/me/photos/:photoIndex/privacy', protect, async (req, res) => {
+  try {
+    const photoIndex = parseInt(req.params.photoIndex);
+    const { isPublic } = req.body;
+    
+    if (typeof isPublic !== 'boolean') {
+      return res.status(400).json({ message: 'isPublic must be a boolean' });
+    }
+
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
+    
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+    if (photoIndex < 0 || photoIndex >= photos.length) {
+      return res.status(400).json({ message: 'Invalid photo index' });
+    }
+
+    // Update photo privacy
+    photos[photoIndex] = {
+      ...photos[photoIndex],
+      isPublic: isPublic,
+    };
+
+    await profile.update({ photos });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
+
+    res.json({ 
+      message: 'Photo privacy updated successfully', 
+      photos: profile.photos
+    });
+  } catch (error) {
+    console.error('Update photo privacy error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/profiles/me/photos/:photoIndex/set-thumbnail
+// @desc    Set a photo as thumbnail (move to index 0)
+// @access  Private
+router.put('/me/photos/:photoIndex/set-thumbnail', protect, async (req, res) => {
+  try {
+    const photoIndex = parseInt(req.params.photoIndex);
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
+    
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+    if (photoIndex < 0 || photoIndex >= photos.length) {
+      return res.status(400).json({ message: 'Invalid photo index' });
+    }
+
+    // Move the selected photo to index 0 (thumbnail position)
+    const selectedPhoto = photos[photoIndex];
+    photos.splice(photoIndex, 1); // Remove from current position
+    photos.unshift(selectedPhoto); // Add to beginning
+
+    await profile.update({ photos });
+    
+    // Reload profile to get the latest data
+    await profile.reload();
+
+    res.json({ 
+      message: 'Photo set as thumbnail successfully', 
+      photos: profile.photos
+    });
+  } catch (error) {
+    console.error('Set thumbnail error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
