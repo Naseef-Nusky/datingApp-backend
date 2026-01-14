@@ -32,7 +32,30 @@ const upload = multer({
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    const { gender, minAge, maxAge, city, country, limit = 20, page = 1, videoChat } = req.query;
+    const {
+      gender,
+      minAge,
+      maxAge,
+      city,
+      country,
+      limit = 20,
+      page = 1,
+      videoChat,
+      zodiacSigns,
+      interests,
+      education,
+      languages,
+      relationship,
+      kids,
+      smoke,
+      drink,
+      minHeight,
+      maxHeight,
+      bodyType,
+      eyes,
+      hair,
+      compatibleZodiacOnly,
+    } = req.query;
     
     // Check if current user has a profile
     const currentUser = await Profile.findOne({ where: { userId: req.user.id } });
@@ -112,16 +135,162 @@ router.get('/', protect, async (req, res) => {
       order: [['createdAt', 'DESC']],
     });
 
-    console.log(`Found ${count} total profiles matching criteria`);
-    console.log(`Returning ${profiles.length} profiles in this page`);
+    console.log(`Found ${count} total profiles matching basic criteria`);
+
+    // -----------------------------
+    // Advanced filters in Node.js
+    // -----------------------------
+    const zodiacFilter = zodiacSigns ? zodiacSigns.split(',').map((z) => z.trim()).filter(Boolean) : [];
+    const interestsFilter = interests ? interests.split(',').map((i) => i.trim()).filter(Boolean) : [];
+    const languagesFilter = languages ? languages.split(',').map((l) => l.trim()).filter(Boolean) : [];
+
+    // Helper to map kids filter to boolean
+    const mapKidsFilter = (value) => {
+      if (!value) return null;
+      if (value === 'No kids') return false;
+      if (value === 'Have kids') return true;
+      return null;
+    };
+
+    // Helper to map smoke/drink filter to acceptable lifestyle values
+    const matchesFrequency = (filterValue, actual) => {
+      if (!filterValue || !actual) return true;
+      const val = actual.toLowerCase();
+      switch (filterValue) {
+        case 'Never':
+          return ['no', 'never', 'non-smoker', 'non-drinker', 'rarely'].some((k) => val.includes(k));
+        case 'Occasionally':
+          return ['occasionally', 'social', 'socially', 'rarely'].some((k) => val.includes(k));
+        case 'Regularly':
+          return ['regular', 'regularly', 'yes', 'daily'].some((k) => val.includes(k));
+        default:
+          return true;
+      }
+    };
+
+    // Zodiac compatibility map (very simple version)
+    const zodiacCompatibility = {
+      aries: ['leo', 'sagittarius', 'gemini', 'aquarius'],
+      taurus: ['virgo', 'capricorn', 'cancer', 'pisces'],
+      gemini: ['libra', 'aquarius', 'aries', 'leo'],
+      cancer: ['scorpio', 'pisces', 'taurus', 'virgo'],
+      leo: ['aries', 'sagittarius', 'gemini', 'libra'],
+      virgo: ['taurus', 'capricorn', 'cancer', 'scorpio'],
+      libra: ['gemini', 'aquarius', 'leo', 'sagittarius'],
+      scorpio: ['cancer', 'pisces', 'virgo', 'capricorn'],
+      sagittarius: ['aries', 'leo', 'libra', 'aquarius'],
+      capricorn: ['taurus', 'virgo', 'scorpio', 'pisces'],
+      aquarius: ['gemini', 'libra', 'aries', 'sagittarius'],
+      pisces: ['cancer', 'scorpio', 'taurus', 'capricorn'],
+    };
+
+    const currentUserZodiac = (currentUser?.lifestyle?.zodiac || '').toLowerCase();
+    const compatibleSigns = compatibleZodiacOnly === 'true' && currentUserZodiac
+      ? (zodiacCompatibility[currentUserZodiac] || [])
+      : null;
+
+    const kidsBoolean = mapKidsFilter(kids);
+
+    const parseHeightCm = (value) => {
+      if (!value) return null;
+      const n = parseInt(value, 10);
+      return Number.isNaN(n) ? null : n;
+    };
+
+    const minHeightCm = parseHeightCm(minHeight);
+    const maxHeightCm = parseHeightCm(maxHeight);
+
+    const filteredProfiles = profiles.filter((profile) => {
+      const lifestyle = profile.lifestyle || {};
+
+      // Interests (at least one in common)
+      if (interestsFilter.length > 0) {
+        const userInterests = Array.isArray(profile.interests) ? profile.interests : [];
+        const hasCommonInterest = interestsFilter.some((i) =>
+          userInterests.map((ui) => ui.toLowerCase()).includes(i.toLowerCase())
+        );
+        if (!hasCommonInterest) return false;
+      }
+
+      // Education
+      if (education && lifestyle.education && lifestyle.education !== education) {
+        return false;
+      } else if (education && !lifestyle.education) {
+        return false;
+      }
+
+      // Languages (at least one match)
+      if (languagesFilter.length > 0) {
+        const userLangs = Array.isArray(lifestyle.languages) ? lifestyle.languages : [];
+        const lowerLangs = userLangs.map((l) => l.toLowerCase());
+        const hasLang = languagesFilter.some((l) => lowerLangs.includes(l.toLowerCase()));
+        if (!hasLang) return false;
+      }
+
+      // Relationship
+      if (relationship && lifestyle.relationship !== relationship) {
+        return false;
+      }
+
+      // Kids
+      if (kidsBoolean !== null) {
+        if (typeof lifestyle.haveKids === 'boolean') {
+          if (lifestyle.haveKids !== kidsBoolean) return false;
+        } else {
+          // If profile doesn't specify, treat as non-match
+          return false;
+        }
+      }
+
+      // Smoke / Drink
+      if (smoke && !matchesFrequency(smoke, lifestyle.smoke)) {
+        return false;
+      }
+      if (drink && !matchesFrequency(drink, lifestyle.drink)) {
+        return false;
+      }
+
+      // Height range (assumes height stored like '180 cm')
+      if (minHeightCm !== null || maxHeightCm !== null) {
+        const h = parseHeightCm(lifestyle.height);
+        if (h === null) return false;
+        if (minHeightCm !== null && h < minHeightCm) return false;
+        if (maxHeightCm !== null && h > maxHeightCm) return false;
+      }
+
+      // Body type / Eyes / Hair
+      if (bodyType && lifestyle.bodyType !== bodyType) return false;
+      if (eyes && lifestyle.eyes !== eyes) return false;
+      if (hair && lifestyle.hair !== hair) return false;
+
+      // Zodiac signs explicit filter
+      if (zodiacFilter.length > 0) {
+        const userZodiac = (lifestyle.zodiac || '').toLowerCase();
+        if (!zodiacFilter.map((z) => z.toLowerCase()).includes(userZodiac)) {
+          return false;
+        }
+      }
+
+      // Compatible zodiac only
+      if (compatibleSigns && compatibleSigns.length > 0) {
+        const userZodiac = (lifestyle.zodiac || '').toLowerCase();
+        if (!compatibleSigns.includes(userZodiac)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    console.log(`Advanced filters reduced profiles from ${profiles.length} to ${filteredProfiles.length}`);
     
-    if (profiles.length === 0 && totalProfiles > 0) {
-      console.warn('No profiles returned but database has profiles. Query might be too restrictive.');
+    if (filteredProfiles.length === 0 && totalProfiles > 0) {
+      console.warn('No profiles returned after advanced filters but database has profiles. Filters might be too restrictive.');
     }
 
     // Get user details for each profile
     const profilesWithUsers = await Promise.all(
-      profiles.map(async (profile) => {
+      filteredProfiles.map(async (profile) => {
         try {
           const user = await User.findByPk(profile.userId, {
             attributes: ['id', 'email', 'userType', 'credits', 'isActive'],
