@@ -69,6 +69,19 @@ const User = sequelize.define(
       type: DataTypes.INTEGER,
       defaultValue: 0,
     },
+    emailPreferences: {
+      type: DataTypes.JSONB,
+      defaultValue: {
+        newMatches: true,
+        newMessages: true,
+        profileViews: true,
+        dailyDigest: true,
+        promotional: false,
+        digestFrequency: 'daily', // 'real-time', 'hourly', 'daily', 'weekly'
+        digestTime: '09:00', // HH:mm format
+      },
+      field: 'email_preferences',
+    },
   },
   {
     tableName: 'users',

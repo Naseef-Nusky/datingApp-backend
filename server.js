@@ -577,6 +577,14 @@ const startServer = async () => {
     // Connect to database and sync models
     await connectDB();
     
+    // Start daily digest scheduler
+    try {
+      const { startDailyDigestScheduler } = await import('./utils/dailyDigestScheduler.js');
+      startDailyDigestScheduler();
+    } catch (error) {
+      console.warn('⚠️ Could not start daily digest scheduler:', error.message);
+    }
+
     // Start server
     httpServer.listen(PORT, () => {
       console.log(`🚀 Server is running on http://localhost:${PORT}`);

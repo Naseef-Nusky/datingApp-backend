@@ -54,6 +54,41 @@ const Notification = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    emailSent: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'email_sent',
+    },
+    emailSentAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'email_sent_at',
+    },
+    emailOpened: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'email_opened',
+    },
+    emailOpenedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'email_opened_at',
+    },
+    emailClicked: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'email_clicked',
+    },
+    emailClickedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'email_clicked_at',
+    },
+    sendgridMessageId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'sendgrid_message_id',
+    },
   },
   {
     tableName: 'notifications',

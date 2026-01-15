@@ -13,6 +13,9 @@ import Block from '../models/Block.js';
 import { protect } from '../middleware/auth.js';
 import multer from 'multer';
 import { uploadToSpaces } from '../utils/spacesUpload.js';
+import { sendEmail, sendEmailNotification } from '../utils/emailService.js';
+import { sendMessageNotification } from '../utils/sendgridService.js';
+import { notifyNewMessage } from '../utils/notificationService.js';
 
 const router = express.Router();
 
@@ -190,17 +193,8 @@ router.post('/', protect, async (req, res) => {
         }],
       });
       
-      const senderName = senderUser?.profile?.firstName || senderUser?.email?.split('@')[0] || 'Someone';
-      const messagePreview = content.length > 50 ? content.substring(0, 50) + '...' : content;
-      
-      await Notification.create({
-        userId: receiverId,
-        type: 'new_message',
-        title: 'New Message',
-        message: `${senderName} sent you a message: ${messagePreview}`,
-        relatedId: message.id,
-        relatedType: 'message',
-      });
+      // Use notification service which handles email sending
+      await notifyNewMessage(receiverId, senderUser, content, message.id);
     } catch (notifError) {
       console.error('Error creating notification:', notifError);
       // Non-critical, continue
@@ -1190,5 +1184,421 @@ router.get('/call-requests', protect, async (req, res) => {
     res.json([]);
   }
 });
+
+
+// ==================== EMAIL ROUTES ====================
+
+// @route   GET /api/messages/emails
+// @desc    Get all emails (messageType='email') for current user
+// @access  Private
+router.get('/emails', protect, async (req, res) => {
+  try {
+    const { filter = 'all' } = req.query; // 'all', 'unread', 'read'
+
+    const whereClause = {
+      [Op.or]: [
+        { sender: req.user.id },
+        { receiver: req.user.id },
+      ],
+      messageType: 'email',
+      isDeleted: { [Op.or]: [false, null] },
+    };
+
+    if (filter === 'unread') {
+      whereClause.isRead = false;
+      whereClause.receiver = req.user.id; // Only unread emails received by user
+    } else if (filter === 'read') {
+      // "Read & Unanswered" - emails that are read but haven't been replied to
+      // This means: emails received by user, marked as read, and no reply exists
+      whereClause.isRead = true;
+      whereClause.receiver = req.user.id; // Only emails received by user
+      
+      // We'll filter out emails that have replies in the frontend
+      // Or we can check in the backend if there's a reply message
+    }
+
+    const emails = await Message.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'senderData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'photos'],
+            },
+          ],
+        },
+        {
+          model: User,
+          as: 'receiverData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'photos'],
+            },
+          ],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    res.json(emails);
+  } catch (error) {
+    console.error('Get emails error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/messages/emails/:emailId
+// @desc    Get single email by ID
+// @access  Private
+router.get('/emails/:emailId', protect, async (req, res) => {
+  try {
+    const { emailId } = req.params;
+
+    const email = await Message.findOne({
+      where: {
+        id: emailId,
+        messageType: 'email',
+        isDeleted: { [Op.or]: [false, null] },
+        [Op.or]: [
+          { sender: req.user.id },
+          { receiver: req.user.id },
+        ],
+      },
+      include: [
+        {
+          model: User,
+          as: 'senderData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos', 'age', 'location'],
+            },
+          ],
+        },
+        {
+          model: User,
+          as: 'receiverData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos', 'age', 'location'],
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!email) {
+      return res.status(404).json({ message: 'Email not found' });
+    }
+
+    // Mark as read if current user is receiver
+    if (email.receiver === req.user.id && !email.isRead) {
+      await email.update({
+        isRead: true,
+        readAt: new Date(),
+      });
+      
+      // Emit socket event for real-time read status update
+      if (req.io) {
+        try {
+          req.io.to(`user-${req.user.id}`).emit('email-read', {
+            emailId: email.id,
+            readAt: new Date(),
+          });
+        } catch (socketError) {
+          console.error('Error emitting email-read socket event:', socketError);
+        }
+      }
+    }
+
+    res.json(email);
+  } catch (error) {
+    console.error('Get email error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/messages/send-email
+// @desc    Send email (internal message + actual email notification)
+// @access  Private
+router.post('/send-email', protect, async (req, res) => {
+  try {
+    const { receiverId, subject, content, mediaUrl } = req.body;
+
+    console.log('📧 [SEND EMAIL] Request received:', { receiverId, hasContent: !!content, hasSubject: !!subject });
+
+    if (!receiverId) {
+      return res.status(400).json({ message: 'Receiver ID is required' });
+    }
+
+    if (!content) {
+      return res.status(400).json({ message: 'Email content is required' });
+    }
+
+    // Get receiver user with profile
+    let receiver;
+    try {
+      receiver = await User.findByPk(receiverId, {
+        include: [
+          {
+            model: Profile,
+            as: 'profile',
+          },
+        ],
+      });
+    } catch (dbError) {
+      console.error('❌ [SEND EMAIL] Database error finding receiver:', dbError);
+      return res.status(500).json({ message: 'Error finding receiver user', error: dbError.message });
+    }
+
+    if (!receiver) {
+      console.warn('⚠️ [SEND EMAIL] Receiver not found:', receiverId);
+      return res.status(404).json({ message: 'Receiver not found' });
+    }
+
+    console.log('✅ [SEND EMAIL] Receiver found:', receiver.email);
+
+    // Check if users are blocked
+    const isBlocked = await Block.findOne({
+      where: {
+        [Op.or]: [
+          { blocker: req.user.id, blocked: receiverId },
+          { blocker: receiverId, blocked: req.user.id },
+        ],
+      },
+    });
+
+    if (isBlocked) {
+      return res.status(403).json({ message: 'Cannot send email: User is blocked' });
+    }
+
+    // Get sender user with profile for email notification
+    let sender;
+    try {
+      sender = await User.findByPk(req.user.id, {
+        include: [
+          {
+            model: Profile,
+            as: 'profile',
+          },
+        ],
+      });
+    } catch (dbError) {
+      console.error('❌ [SEND EMAIL] Database error finding sender:', dbError);
+      return res.status(500).json({ message: 'Error finding sender user', error: dbError.message });
+    }
+
+    if (!sender) {
+      console.error('❌ [SEND EMAIL] Sender not found:', req.user.id);
+      return res.status(500).json({ message: 'Sender user not found' });
+    }
+
+    // Find or create chat thread for email conversation (REQUIRED - chat_id is NOT NULL)
+    let chat;
+    try {
+      chat = await findOrCreateChat(req.user.id, receiverId);
+      console.log('✅ [SEND EMAIL] Chat thread found/created:', chat.id);
+    } catch (chatError) {
+      console.error('❌ [SEND EMAIL] Database error finding/creating chat:', chatError);
+      return res.status(500).json({ message: 'Error creating chat thread', error: chatError.message });
+    }
+
+    // Create internal message record WITH chat_id (REQUIRED - fixes NOT NULL constraint)
+    const messageData = {
+      chatId: chat.id, // ✅ REQUIRED - every message must belong to a chat thread
+      sender: req.user.id,
+      receiver: receiverId,
+      content: content,
+      mediaUrl: mediaUrl || null,
+      messageType: 'email', // Email is just a message type, still needs chat_id
+      creditsUsed: 0,
+    };
+
+    let message;
+    try {
+      message = await Message.create(messageData);
+      console.log('✅ [SEND EMAIL] Message created with chat_id:', message.id, 'chat:', chat.id);
+    } catch (dbError) {
+      console.error('❌ [SEND EMAIL] Database error creating message:', dbError);
+      return res.status(500).json({ message: 'Error creating message', error: dbError.message });
+    }
+
+    // Send actual email notification to receiver's email address
+    // Note: Email sending is optional - if it fails, the message is still saved
+    try {
+      const emailSubject = subject || `New email from ${sender.profile?.firstName || sender.email?.split('@')[0] || 'Someone'}`;
+      console.log('📧 [SEND EMAIL] Attempting to send email notification...');
+      
+      let emailResult;
+      
+      // Try SendGrid first (if configured), then fallback to SMTP
+      if (process.env.SENDGRID_API_KEY) {
+        console.log('📧 [SEND EMAIL] Using SendGrid...');
+        emailResult = await sendMessageNotification(receiver, sender, content, message.id);
+      } else {
+        console.log('📧 [SEND EMAIL] Using SMTP (nodemailer)...');
+        emailResult = await sendEmailNotification(receiver, sender, content, 'email');
+      }
+      
+      if (emailResult && emailResult.success) {
+        console.log('✅ [SEND EMAIL] Email notification sent to:', receiver.email);
+      } else {
+        console.warn('⚠️ [SEND EMAIL] Email notification failed (but message saved):', emailResult?.error || 'Unknown error');
+      }
+    } catch (emailError) {
+      console.error('❌ [SEND EMAIL] Error sending email notification:', emailError);
+      console.error('❌ [SEND EMAIL] Error details:', emailError.message);
+      // Don't fail the request if email sending fails - message is already saved
+      // This allows the system to work even if email service is not configured
+    }
+
+    // Emit socket event for real-time notification
+    if (req.io) {
+      try {
+        const receiverIdStr = String(receiverId);
+        req.io.to(`user-${receiverIdStr}`).emit('new-email', {
+          messageId: message.id,
+          senderId: req.user.id,
+          receiverId: receiverId,
+          subject: subject || 'New email',
+          createdAt: message.createdAt,
+        });
+      } catch (socketError) {
+        console.error('Error emitting socket event:', socketError);
+      }
+    }
+
+    // Return message with user details
+    const messageWithDetails = await Message.findByPk(message.id, {
+      include: [
+        {
+          model: User,
+          as: 'senderData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos'], // Use 'photos' instead of 'profileImage'
+            },
+          ],
+        },
+        {
+          model: User,
+          as: 'receiverData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos'], // Use 'photos' instead of 'profileImage'
+            },
+          ],
+        },
+      ],
+    });
+
+    res.status(201).json(messageWithDetails);
+  } catch (error) {
+    console.error('❌ [SEND EMAIL] Error:', error);
+    console.error('❌ [SEND EMAIL] Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// @route   PUT /api/messages/emails/:emailId/read
+// @desc    Mark email as read
+// @access  Private
+router.put('/emails/:emailId/read', protect, async (req, res) => {
+  try {
+    const { emailId } = req.params;
+
+    const email = await Message.findOne({
+      where: {
+        id: emailId,
+        messageType: 'email',
+        receiver: req.user.id, // Only receiver can mark as read
+      },
+    });
+
+    if (!email) {
+      return res.status(404).json({ message: 'Email not found' });
+    }
+
+    await email.update({
+      isRead: true,
+      readAt: new Date(),
+    });
+
+    // Emit socket event for real-time read status update
+    if (req.io) {
+      try {
+        req.io.to(`user-${req.user.id}`).emit('email-read', {
+          emailId: email.id,
+          readAt: new Date(),
+        });
+      } catch (socketError) {
+        console.error('Error emitting email-read socket event:', socketError);
+      }
+    }
+
+    res.json(email);
+  } catch (error) {
+    console.error('Mark email as read error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   DELETE /api/messages/emails/:emailId
+// @desc    Delete email (soft delete)
+// @access  Private
+router.delete('/emails/:emailId', protect, async (req, res) => {
+  try {
+    const { emailId } = req.params;
+
+    const email = await Message.findOne({
+      where: {
+        id: emailId,
+        messageType: 'email',
+        [Op.or]: [
+          { sender: req.user.id },
+          { receiver: req.user.id },
+        ],
+      },
+    });
+
+    if (!email) {
+      return res.status(404).json({ message: 'Email not found' });
+    }
+
+    await email.update({
+      isDeleted: true,
+      deletedAt: new Date(),
+    });
+
+    res.json({ message: 'Email deleted successfully' });
+  } catch (error) {
+    console.error('Delete email error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 export default router;
