@@ -40,6 +40,9 @@ const io = new SocketServer(httpServer, {
   pingTimeout: 60000, // 60 seconds
   pingInterval: 25000, // 25 seconds
   transports: ['websocket', 'polling'],
+  allowEIO3: true, // Allow Engine.IO v3 clients
+  connectTimeout: 45000, // Connection timeout
+  upgradeTimeout: 10000, // Upgrade timeout
 });
 
 const PORT = process.env.PORT || 5000;

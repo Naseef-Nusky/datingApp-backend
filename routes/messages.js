@@ -676,8 +676,14 @@ router.get('/conversations', protect, async (req, res) => {
     const conversations = Array.from(conversationsMap.values());
     res.json(conversations);
   } catch (error) {
-    console.error('Get conversations error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('❌ [GET CONVERSATIONS] Error:', error);
+    console.error('❌ [GET CONVERSATIONS] Error message:', error.message);
+    console.error('❌ [GET CONVERSATIONS] Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -877,6 +883,8 @@ router.post('/chat-requests', protect, async (req, res) => {
 // @access  Private
 router.get('/chat-requests', protect, async (req, res) => {
   try {
+    console.log('📧 [GET CHAT REQUESTS] Fetching for user:', req.user.id);
+    
     const requests = await ChatRequest.findAll({
       where: {
         receiverId: req.user.id,
@@ -891,16 +899,30 @@ router.get('/chat-requests', protect, async (req, res) => {
           model: User,
           as: 'senderData',
           attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos'],
+            },
+          ],
         },
       ],
       order: [['created_at', 'DESC']],
       limit: 50,
     });
 
+    console.log('✅ [GET CHAT REQUESTS] Found', requests.length, 'requests');
     res.json(requests);
   } catch (error) {
-    console.error('Get chat requests error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('❌ [GET CHAT REQUESTS] Error:', error);
+    console.error('❌ [GET CHAT REQUESTS] Error message:', error.message);
+    console.error('❌ [GET CHAT REQUESTS] Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -1250,8 +1272,14 @@ router.get('/emails', protect, async (req, res) => {
 
     res.json(emails);
   } catch (error) {
-    console.error('Get emails error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('❌ [GET EMAILS] Error:', error);
+    console.error('❌ [GET EMAILS] Error message:', error.message);
+    console.error('❌ [GET EMAILS] Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -1334,9 +1362,27 @@ router.get('/emails/:emailId', protect, async (req, res) => {
 // @route   POST /api/messages/send-email
 // @desc    Send email (internal message + actual email notification)
 // @access  Private
-router.post('/send-email', protect, async (req, res) => {
+router.post('/send-email', protect, upload.single('media'), async (req, res) => {
   try {
     const { receiverId, subject, content, mediaUrl } = req.body;
+    let uploadedMediaUrl = mediaUrl || null;
+    
+    // Handle file upload if present
+    if (req.file) {
+      try {
+        console.log('📧 [SEND EMAIL] Uploading media file...');
+        uploadedMediaUrl = await uploadToSpaces(
+          req.file.buffer,
+          req.file.mimetype,
+          `emails/${Date.now()}-${req.file.originalname}`,
+          req.file.originalname
+        );
+        console.log('✅ [SEND EMAIL] Media uploaded:', uploadedMediaUrl);
+      } catch (uploadError) {
+        console.error('❌ [SEND EMAIL] Error uploading media:', uploadError);
+        return res.status(500).json({ message: 'Error uploading media file', error: uploadError.message });
+      }
+    }
 
     console.log('📧 [SEND EMAIL] Request received:', { receiverId, hasContent: !!content, hasSubject: !!subject });
 
@@ -1344,8 +1390,9 @@ router.post('/send-email', protect, async (req, res) => {
       return res.status(400).json({ message: 'Receiver ID is required' });
     }
 
-    if (!content) {
-      return res.status(400).json({ message: 'Email content is required' });
+    // Allow empty content if media is provided
+    if (!content && !req.file && !mediaUrl) {
+      return res.status(400).json({ message: 'Email content or media is required' });
     }
 
     // Get receiver user with profile
@@ -1370,6 +1417,8 @@ router.post('/send-email', protect, async (req, res) => {
     }
 
     console.log('✅ [SEND EMAIL] Receiver found:', receiver.email);
+    console.log('✅ [SEND EMAIL] Receiver has profile:', !!receiver.profile);
+    console.log('✅ [SEND EMAIL] Receiver email valid:', receiver.email && receiver.email.includes('@'));
 
     // Check if users are blocked
     const isBlocked = await Block.findOne({
@@ -1422,7 +1471,7 @@ router.post('/send-email', protect, async (req, res) => {
       sender: req.user.id,
       receiver: receiverId,
       content: content,
-      mediaUrl: mediaUrl || null,
+      mediaUrl: uploadedMediaUrl || null,
       messageType: 'email', // Email is just a message type, still needs chat_id
       creditsUsed: 0,
     };
@@ -1436,31 +1485,64 @@ router.post('/send-email', protect, async (req, res) => {
       return res.status(500).json({ message: 'Error creating message', error: dbError.message });
     }
 
-    // Send actual email notification to receiver's email address
+    // Send actual email notification to receiver's email address IMMEDIATELY
     // Note: Email sending is optional - if it fails, the message is still saved
+    // But we send it synchronously to ensure immediate delivery
+    const emailStartTime = Date.now();
     try {
       const emailSubject = subject || `New email from ${sender.profile?.firstName || sender.email?.split('@')[0] || 'Someone'}`;
-      console.log('📧 [SEND EMAIL] Attempting to send email notification...');
+      console.log('📧 [SEND EMAIL] ========== STARTING EMAIL SEND ==========');
+      console.log('📧 [SEND EMAIL] Timestamp:', new Date().toISOString());
+      console.log('📧 [SEND EMAIL] Receiver email:', receiver.email);
+      console.log('📧 [SEND EMAIL] Sender:', sender.email);
+      console.log('📧 [SEND EMAIL] Message ID:', message.id);
       
       let emailResult;
       
       // Try SendGrid first (if configured), then fallback to SMTP
       if (process.env.SENDGRID_API_KEY) {
-        console.log('📧 [SEND EMAIL] Using SendGrid...');
-        emailResult = await sendMessageNotification(receiver, sender, content, message.id);
+        console.log('📧 [SEND EMAIL] Using SendGrid (IMMEDIATE SEND)...');
+        console.log('📧 [SEND EMAIL] FROM_EMAIL:', process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER);
+        console.log('📧 [SEND EMAIL] Media URL:', uploadedMediaUrl || 'None');
+        
+        // Send email IMMEDIATELY - no delays, no queues
+        emailResult = await sendMessageNotification(receiver, sender, content, message.id, uploadedMediaUrl);
+        
+        const emailDuration = Date.now() - emailStartTime;
+        console.log('📧 [SEND EMAIL] Email send completed in', emailDuration, 'ms');
       } else {
-        console.log('📧 [SEND EMAIL] Using SMTP (nodemailer)...');
-        emailResult = await sendEmailNotification(receiver, sender, content, 'email');
+        console.log('📧 [SEND EMAIL] Using SMTP (nodemailer) (IMMEDIATE SEND)...');
+        emailResult = await sendEmailNotification(receiver, sender, content, 'email', uploadedMediaUrl);
+        
+        const emailDuration = Date.now() - emailStartTime;
+        console.log('📧 [SEND EMAIL] Email send completed in', emailDuration, 'ms');
       }
       
       if (emailResult && emailResult.success) {
-        console.log('✅ [SEND EMAIL] Email notification sent to:', receiver.email);
+        const totalTime = Date.now() - emailStartTime;
+        console.log('✅ [SEND EMAIL] ========== EMAIL SENT SUCCESSFULLY ==========');
+        console.log('✅ [SEND EMAIL] Total time:', totalTime, 'ms');
+        console.log('✅ [SEND EMAIL] Email notification sent successfully to:', receiver.email);
+        console.log('✅ [SEND EMAIL] Message ID:', emailResult.messageId);
+        console.log('✅ [SEND EMAIL] Status Code:', emailResult.statusCode);
+        console.log('✅ [SEND EMAIL] Sent at:', emailResult.sentAt || new Date().toISOString());
+        console.log('✅ [SEND EMAIL] Email should arrive within 1-5 seconds');
+        console.log('✅ [SEND EMAIL] Check SendGrid Activity: https://app.sendgrid.com/activity');
       } else {
-        console.warn('⚠️ [SEND EMAIL] Email notification failed (but message saved):', emailResult?.error || 'Unknown error');
+        console.error('❌ [SEND EMAIL] ========== EMAIL SEND FAILED ==========');
+        console.error('❌ [SEND EMAIL] Error:', emailResult?.error || 'Unknown error');
+        console.error('❌ [SEND EMAIL] Details:', emailResult?.details || 'No details');
+        console.error('❌ [SEND EMAIL] Help URL:', emailResult?.helpUrl || 'N/A');
+        console.error('❌ [SEND EMAIL] Full result:', JSON.stringify(emailResult, null, 2));
+        // Still return success for the API call, but log the email failure
       }
     } catch (emailError) {
-      console.error('❌ [SEND EMAIL] Error sending email notification:', emailError);
-      console.error('❌ [SEND EMAIL] Error details:', emailError.message);
+      const totalTime = Date.now() - emailStartTime;
+      console.error('❌ [SEND EMAIL] ========== EXCEPTION DURING EMAIL SEND ==========');
+      console.error('❌ [SEND EMAIL] Total time before error:', totalTime, 'ms');
+      console.error('❌ [SEND EMAIL] Error:', emailError);
+      console.error('❌ [SEND EMAIL] Error message:', emailError.message);
+      console.error('❌ [SEND EMAIL] Error stack:', emailError.stack);
       // Don't fail the request if email sending fails - message is already saved
       // This allows the system to work even if email service is not configured
     }
@@ -1600,5 +1682,89 @@ router.delete('/emails/:emailId', protect, async (req, res) => {
   }
 });
 
+
+// @route   POST /api/messages/test-email
+// @desc    Test email sending (for debugging)
+// @access  Private
+router.post('/test-email', protect, async (req, res) => {
+  try {
+    const { testEmail } = req.body;
+    
+    if (!testEmail) {
+      return res.status(400).json({ message: 'testEmail is required' });
+    }
+
+    console.log('🧪 [TEST EMAIL] Testing email delivery to:', testEmail);
+    
+    // Get current user
+    const user = await User.findByPk(req.user.id, {
+      include: [{ model: Profile, as: 'profile' }],
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Create a test sender object
+    const testSender = {
+      id: user.id,
+      email: user.email,
+      profile: user.profile,
+    };
+
+    // Create a test receiver object
+    const testReceiver = {
+      id: 'test-receiver-id',
+      email: testEmail,
+      profile: {
+        firstName: 'Test',
+        lastName: 'User',
+        photos: user.profile?.photos || [],
+      },
+    };
+
+    const testContent = 'This is a test email to verify immediate delivery. Sent at: ' + new Date().toISOString();
+    const testMessageId = 'test-' + Date.now();
+
+    console.log('🧪 [TEST EMAIL] Sending test email...');
+    const startTime = Date.now();
+
+    let emailResult;
+    if (process.env.SENDGRID_API_KEY) {
+      emailResult = await sendMessageNotification(testReceiver, testSender, testContent, testMessageId);
+    } else {
+      emailResult = await sendEmailNotification(testReceiver, testSender, testContent, 'email');
+    }
+
+    const duration = Date.now() - startTime;
+
+    if (emailResult && emailResult.success) {
+      console.log('✅ [TEST EMAIL] Test email sent successfully in', duration, 'ms');
+      res.json({
+        success: true,
+        message: 'Test email sent successfully',
+        duration: duration + 'ms',
+        messageId: emailResult.messageId,
+        sentAt: new Date().toISOString(),
+        expectedDelivery: '1-5 seconds',
+      });
+    } else {
+      console.error('❌ [TEST EMAIL] Test email failed:', emailResult);
+      res.status(500).json({
+        success: false,
+        message: 'Test email failed',
+        error: emailResult?.error || 'Unknown error',
+        details: emailResult?.details,
+      });
+    }
+  } catch (error) {
+    console.error('❌ [TEST EMAIL] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Test email error',
+      error: error.message,
+    });
+  }
+});
 
 export default router;
