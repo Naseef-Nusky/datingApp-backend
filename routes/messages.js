@@ -1101,6 +1101,199 @@ router.put('/chat-requests/:requestId/reject', protect, async (req, res) => {
   }
 });
 
+// @route   POST /api/messages/mingle
+// @desc    Send mingle message to multiple matching profiles
+// @access  Private
+router.post('/mingle', protect, async (req, res) => {
+  try {
+    const { gender, ageMin, ageMax, message } = req.body;
+
+    console.log('📧 Mingle request received:', { gender, ageMin, ageMax, messageLength: message?.length, userId: req.user.id });
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: 'Message is required' });
+    }
+
+    // Build query to find matching profiles
+    const where = {
+      userId: {
+        [Op.ne]: req.user.id, // Exclude current user
+      },
+    };
+
+    // Gender filter - map frontend values to backend values
+    if (gender && gender !== 'both') {
+      // Map frontend values (woman/man) to backend values (female/male)
+      if (gender === 'woman') {
+        where.gender = 'female';
+      } else if (gender === 'man') {
+        where.gender = 'male';
+      } else {
+        where.gender = gender; // Fallback for other values
+      }
+    }
+
+    console.log('🔍 Searching profiles with criteria:', where);
+
+    // Age range filter - use numeric checks so strings like "20" work correctly
+    const minAgeNum = ageMin !== undefined && ageMin !== null && ageMin !== '' 
+      ? parseInt(ageMin, 10) 
+      : null;
+    const maxAgeNum = ageMax !== undefined && ageMax !== null && ageMax !== '' 
+      ? parseInt(ageMax, 10) 
+      : null;
+
+    if (!Number.isNaN(minAgeNum) && minAgeNum !== null || !Number.isNaN(maxAgeNum) && maxAgeNum !== null) {
+      where.age = {};
+      if (!Number.isNaN(minAgeNum) && minAgeNum !== null) {
+        where.age[Op.gte] = minAgeNum;
+      }
+      if (!Number.isNaN(maxAgeNum) && maxAgeNum !== null) {
+        where.age[Op.lte] = maxAgeNum;
+      }
+    }
+
+    // Find matching profiles (limit to 50 to avoid overwhelming)
+    const matchingProfiles = await Profile.findAll({
+      where,
+      limit: 50,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'email'],
+        },
+      ],
+    });
+
+    console.log(`✅ Found ${matchingProfiles.length} matching profiles`);
+
+    if (matchingProfiles.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No matching profiles found',
+        matchedProfiles: [],
+        sentCount: 0,
+      });
+    }
+
+    // Send chat requests to all matching profiles
+    const sentRequests = [];
+    const failedRequests = [];
+
+    for (const profile of matchingProfiles) {
+      try {
+        // Check if users are blocked
+        const isBlocked = await Block.findOne({
+          where: {
+            [Op.or]: [
+              { blocker: req.user.id, blocked: profile.userId },
+              { blocker: profile.userId, blocked: req.user.id },
+            ],
+          },
+        });
+
+        if (isBlocked) {
+          failedRequests.push({ profileId: profile.userId, reason: 'blocked' });
+          continue;
+        }
+
+        // Check if chat already exists
+        const existingChat = await Chat.findOne({
+          where: {
+            [Op.or]: [
+              { user1Id: req.user.id, user2Id: profile.userId },
+              { user1Id: profile.userId, user2Id: req.user.id },
+            ],
+          },
+        });
+
+        if (existingChat) {
+          // Chat already exists, skip
+          continue;
+        }
+
+        // Check if pending request already exists
+        const existingRequest = await ChatRequest.findOne({
+          where: {
+            senderId: req.user.id,
+            receiverId: profile.userId,
+            status: 'pending',
+          },
+        });
+
+        if (existingRequest) {
+          // Request already sent, skip
+          continue;
+        }
+
+        // Create chat request
+        const chatRequest = await ChatRequest.create({
+          senderId: req.user.id,
+          receiverId: profile.userId,
+          firstMessage: message.trim(),
+          status: 'pending',
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        });
+
+        // Create notification for receiver
+        try {
+          await Notification.create({
+            userId: profile.userId,
+            type: 'chat_request',
+            title: 'New Chat Request',
+            message: `You have a new chat request`,
+            relatedId: chatRequest.id,
+            relatedType: 'chat_request',
+          });
+        } catch (notifError) {
+          console.error('Error creating notification:', notifError);
+        }
+
+        // Emit socket event for real-time notification
+        if (req.io) {
+          try {
+            const receiverIdStr = String(profile.userId);
+            req.io.to(`user-${receiverIdStr}`).emit('new-chat-request', {
+              requestId: chatRequest.id,
+              senderId: req.user.id,
+              receiverId: profile.userId,
+              firstMessage: message.trim(),
+              createdAt: chatRequest.createdAt,
+            });
+          } catch (socketError) {
+            console.error('Error emitting socket event:', socketError);
+          }
+        }
+
+        sentRequests.push({
+          id: profile.id,
+          userId: profile.userId,
+          firstName: profile.firstName,
+          photos: profile.photos || [],
+        });
+      } catch (error) {
+        console.error(`Error sending mingle to profile ${profile.userId}:`, error);
+        failedRequests.push({ profileId: profile.userId, reason: error.message });
+      }
+    }
+
+    console.log(`✅ Mingle completed: ${sentRequests.length} sent, ${failedRequests.length} failed`);
+
+    res.status(200).json({
+      success: true,
+      message: `Sent mingle message to ${sentRequests.length} profile(s)`,
+      matchedProfiles: sentRequests,
+      sentCount: sentRequests.length,
+      failedCount: failedRequests.length,
+    });
+  } catch (error) {
+    console.error('❌ Mingle error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   POST /api/messages/upload
 // @desc    Upload a file (image, video, or audio) for a message
 // @access  Private

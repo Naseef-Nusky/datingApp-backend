@@ -355,6 +355,24 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/profiles/me
+// @desc    Get own profile
+// @access  Private
+router.get('/me', protect, async (req, res) => {
+  try {
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
+    
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    res.json(profile);
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   GET /api/profiles/:id
 // @desc    Get profile by ID (userId)
 // @access  Private
