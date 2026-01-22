@@ -1,6 +1,7 @@
 import express from 'express';
 import Story from '../models/Story.js';
 import User from '../models/User.js';
+import Profile from '../models/Profile.js';
 import { protect } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import multer from 'multer';
@@ -82,6 +83,13 @@ router.get('/', protect, async (req, res) => {
           model: User,
           as: 'user',
           attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['id', 'firstName', 'lastName', 'photos'],
+            },
+          ],
         },
       ],
       order: [['createdAt', 'DESC']],
@@ -171,6 +179,44 @@ router.post('/:id/react', protect, async (req, res) => {
     res.json(story);
   } catch (error) {
     console.error('React to story error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/stories/:id
+// @desc    Delete a story
+// @access  Private
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const story = await Story.findByPk(req.params.id);
+
+    if (!story) {
+      return res.status(404).json({ message: 'Story not found' });
+    }
+
+    // Check if user owns the story
+    if (String(story.userId) !== String(req.user.id)) {
+      return res.status(403).json({ message: 'Not authorized to delete this story' });
+    }
+
+    // Delete media from DigitalOcean Spaces if needed
+    if (story.mediaUrl) {
+      try {
+        await deleteFromSpaces(story.mediaUrl);
+        console.log('Story media deleted from Spaces:', story.mediaUrl);
+      } catch (deleteError) {
+        console.error('Error deleting story media from Spaces:', deleteError);
+        // Continue with story deletion even if media deletion fails
+      }
+    }
+
+    // Delete story from database
+    await story.destroy();
+    console.log('Story deleted successfully:', req.params.id);
+
+    res.json({ message: 'Story deleted successfully' });
+  } catch (error) {
+    console.error('Delete story error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

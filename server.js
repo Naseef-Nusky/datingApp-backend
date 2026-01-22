@@ -121,6 +121,34 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Handle typing events
+  socket.on('typing', (data) => {
+    const { userId, remoteUserId } = data;
+    if (userId && remoteUserId) {
+      const remoteUserIdStr = String(remoteUserId);
+      const roomName = `user-${remoteUserIdStr}`;
+      // Emit typing event to the remote user
+      io.to(roomName).emit('user-typing', {
+        userId: String(userId),
+        remoteUserId: remoteUserIdStr,
+      });
+    }
+  });
+
+  // Handle stopped typing events
+  socket.on('stopped-typing', (data) => {
+    const { userId, remoteUserId } = data;
+    if (userId && remoteUserId) {
+      const remoteUserIdStr = String(remoteUserId);
+      const roomName = `user-${remoteUserIdStr}`;
+      // Emit stopped typing event to the remote user
+      io.to(roomName).emit('user-stopped-typing', {
+        userId: String(userId),
+        remoteUserId: remoteUserIdStr,
+      });
+    }
+  });
+
   socket.on('call-request', async (data) => {
     console.log('📞 [SERVER] Call request received:', data);
     console.log('📞 [SERVER] Caller ID:', data.callerId);
