@@ -27,6 +27,7 @@ import streamerRoutes from './routes/streamer.js';
 import userStatusRoutes from './routes/userStatus.js';
 import agoraRoutes from './routes/agora.js';
 import adminRoutes from './routes/admin.js';
+import wishlistRoutes from './routes/wishlist.js';
 
 dotenv.config();
 
@@ -61,7 +62,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Create uploads directories
 import fs from 'fs';
-const uploadDirs = ['uploads', 'uploads/stories'];
+const uploadDirs = ['uploads', 'uploads/stories', 'uploads/wishlist'];
 uploadDirs.forEach((dir) => {
   const dirPath = path.join(__dirname, dir);
   if (!fs.existsSync(dirPath)) {
@@ -96,6 +97,7 @@ app.use('/api/streamer', streamerRoutes);
 app.use('/api/user', userStatusRoutes);
 app.use('/api/agora', agoraRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/wishlist', wishlistRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections

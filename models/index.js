@@ -9,6 +9,8 @@ import CallRequest from './CallRequest.js';
 import Story from './Story.js';
 import Gift from './Gift.js';
 import GiftCatalog from './GiftCatalog.js';
+import WishlistCategory from './WishlistCategory.js';
+import WishlistProduct from './WishlistProduct.js';
 import CreditTransaction from './CreditTransaction.js';
 import Notification from './Notification.js';
 import Report from './Report.js';
@@ -48,6 +50,10 @@ Gift.belongsTo(User, { foreignKey: 'sender', as: 'senderData' });
 Gift.belongsTo(User, { foreignKey: 'receiver', as: 'receiverData' });
 Gift.belongsTo(GiftCatalog, { foreignKey: 'giftItem', as: 'giftItemData' });
 
+// Wishlist associations
+WishlistCategory.hasMany(WishlistProduct, { foreignKey: 'categoryId', as: 'products' });
+WishlistProduct.belongsTo(WishlistCategory, { foreignKey: 'categoryId', as: 'category' });
+
 // CreditTransaction associations
 CreditTransaction.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
@@ -74,6 +80,8 @@ export {
   Story,
   Gift,
   GiftCatalog,
+  WishlistCategory,
+  WishlistProduct,
   CreditTransaction,
   Notification,
   Report,

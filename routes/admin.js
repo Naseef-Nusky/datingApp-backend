@@ -1,11 +1,31 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
-import { User, Profile, Report } from '../models/index.js';
+import { User, Profile, Report, WishlistCategory, WishlistProduct } from '../models/index.js';
 import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
+import { uploadToSpaces } from '../utils/spacesUpload.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
+
+// Multer for wishlist product image: memory for Spaces, disk fallback
+const wishlistStorage = multer.memoryStorage();
+const wishlistUpload = multer({
+  storage: wishlistStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'), false);
+  },
+});
 
 // ============================================
 // Admin Users Routes (for managing admin accounts)
@@ -515,11 +535,232 @@ router.get('/reports/stats', protect, admin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching report stats:', error);
-    // If Report model doesn't exist or has issues, return default values
     res.json({
       totalReports: 0,
       pendingReports: 0,
     });
+  }
+});
+
+// ============================================
+// Wishlist Categories (for CRM category + product management)
+// ============================================
+
+router.get('/wishlist-categories', protect, admin, async (req, res) => {
+  try {
+    const categories = await WishlistCategory.findAll({
+      order: [['sortOrder', 'ASC'], ['name', 'ASC']],
+    });
+    res.json({ categories });
+  } catch (error) {
+    console.error('Error fetching wishlist categories:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post(
+  '/wishlist-categories',
+  protect,
+  admin,
+  [body('name').trim().notEmpty(), body('slug').trim().notEmpty()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { name, slug, sortOrder } = req.body;
+      const cat = await WishlistCategory.create({
+        name: name.trim(),
+        slug: (slug || name).trim().toLowerCase().replace(/\s+/g, '-'),
+        sortOrder: sortOrder != null ? parseInt(sortOrder, 10) : 0,
+      });
+      res.status(201).json({ category: cat });
+    } catch (error) {
+      console.error('Error creating wishlist category:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.put(
+  '/wishlist-categories/:id',
+  protect,
+  admin,
+  [body('name').optional().trim().notEmpty(), body('slug').optional().trim().notEmpty()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const cat = await WishlistCategory.findByPk(req.params.id);
+      if (!cat) return res.status(404).json({ message: 'Category not found' });
+      if (req.body.name) cat.name = req.body.name.trim();
+      if (req.body.slug) cat.slug = req.body.slug.trim().toLowerCase().replace(/\s+/g, '-');
+      if (req.body.sortOrder != null) cat.sortOrder = parseInt(req.body.sortOrder, 10);
+      if (req.body.isActive != null) cat.isActive = !!req.body.isActive;
+      await cat.save();
+      res.json({ category: cat });
+    } catch (error) {
+      console.error('Error updating wishlist category:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.delete('/wishlist-categories/:id', protect, admin, async (req, res) => {
+  try {
+    const cat = await WishlistCategory.findByPk(req.params.id);
+    if (!cat) return res.status(404).json({ message: 'Category not found' });
+    await WishlistProduct.destroy({ where: { categoryId: cat.id } });
+    await cat.destroy();
+    res.json({ message: 'Category deleted' });
+  } catch (error) {
+    console.error('Error deleting wishlist category:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ============================================
+// Wishlist Products (with image upload)
+// ============================================
+
+router.get('/wishlist-products', protect, admin, async (req, res) => {
+  try {
+    const { categoryId } = req.query;
+    const where = {};
+    if (categoryId) where.categoryId = categoryId;
+    const products = await WishlistProduct.findAll({
+      where,
+      include: [{ model: WishlistCategory, as: 'category', attributes: ['id', 'name', 'slug'] }],
+      order: [['sortOrder', 'ASC'], ['name', 'ASC']],
+    });
+    res.json({ products });
+  } catch (error) {
+    console.error('Error fetching wishlist products:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * Upload wishlist product image to DigitalOcean Spaces (folder: wishlist/).
+ * When DO_SPACES_* env vars are set, always uses Spaces. Falls back to local disk only when Spaces is not configured.
+ */
+async function saveProductImage(req, file) {
+  if (!file || !file.buffer) return null;
+
+  const spacesConfigured = !!(
+    process.env.DO_SPACES_ENDPOINT &&
+    process.env.DO_SPACES_KEY &&
+    process.env.DO_SPACES_SECRET &&
+    process.env.DO_SPACES_NAME
+  );
+
+  if (spacesConfigured) {
+    // Always save wishlist product images in DigitalOcean Spaces under wishlist/ folder
+    const url = await uploadToSpaces(file.buffer, file.mimetype, 'wishlist', file.originalname || '');
+    return url;
+  }
+
+  // Fallback to local uploads/wishlist only when Spaces is not configured
+  const ext = (file.originalname || '').split('.').pop() || 'jpg';
+  const filename = `${uuidv4()}.${ext}`;
+  const dir = path.join(__dirname, '..', 'uploads', 'wishlist');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, filename), file.buffer);
+  const base = req.protocol + '://' + req.get('host');
+  return `${base}/uploads/wishlist/${filename}`;
+}
+
+router.post(
+  '/wishlist-products',
+  protect,
+  admin,
+  wishlistUpload.single('image'),
+  [
+    body('name').trim().notEmpty(),
+    body('categoryId').trim().notEmpty().isUUID(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { name, description, categoryId, sortOrder } = req.body;
+      const category = await WishlistCategory.findByPk(categoryId);
+      if (!category) return res.status(400).json({ message: 'Category not found' });
+      let imageUrl = (req.body.imageUrl && req.body.imageUrl.trim()) || null;
+      if (req.file) {
+        const url = await saveProductImage(req, req.file);
+        if (url) imageUrl = url;
+      }
+      const product = await WishlistProduct.create({
+        name: name.trim(),
+        description: (description || '').trim() || null,
+        categoryId,
+        imageUrl,
+        sortOrder: sortOrder != null ? parseInt(sortOrder, 10) : 0,
+      });
+      const withCategory = await WishlistProduct.findByPk(product.id, {
+        include: [{ model: WishlistCategory, as: 'category', attributes: ['id', 'name', 'slug'] }],
+      });
+      res.status(201).json({ product: withCategory });
+    } catch (error) {
+      console.error('Error creating wishlist product:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.put(
+  '/wishlist-products/:id',
+  protect,
+  admin,
+  wishlistUpload.single('image'),
+  [
+    body('name').optional().trim().notEmpty(),
+    body('categoryId').optional().trim().isUUID(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const product = await WishlistProduct.findByPk(req.params.id, {
+        include: [{ model: WishlistCategory, as: 'category' }],
+      });
+      if (!product) return res.status(404).json({ message: 'Product not found' });
+      if (req.body.name) product.name = req.body.name.trim();
+      if (req.body.description !== undefined) product.description = (req.body.description || '').trim() || null;
+      if (req.body.categoryId) {
+        const cat = await WishlistCategory.findByPk(req.body.categoryId);
+        if (!cat) return res.status(400).json({ message: 'Category not found' });
+        product.categoryId = req.body.categoryId;
+      }
+      if (req.body.sortOrder != null) product.sortOrder = parseInt(req.body.sortOrder, 10);
+      if (req.body.isActive != null) product.isActive = !!req.body.isActive;
+      if (req.file) {
+        const url = await saveProductImage(req, req.file);
+        if (url) product.imageUrl = url;
+      } else if (req.body.imageUrl !== undefined) {
+        product.imageUrl = (req.body.imageUrl || '').trim() || null;
+      }
+      await product.save();
+      const updated = await WishlistProduct.findByPk(product.id, {
+        include: [{ model: WishlistCategory, as: 'category', attributes: ['id', 'name', 'slug'] }],
+      });
+      res.json({ product: updated });
+    } catch (error) {
+      console.error('Error updating wishlist product:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.delete('/wishlist-products/:id', protect, admin, async (req, res) => {
+  try {
+    const product = await WishlistProduct.findByPk(req.params.id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    await product.destroy();
+    res.json({ message: 'Product deleted' });
+  } catch (error) {
+    console.error('Error deleting wishlist product:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
