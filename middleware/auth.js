@@ -31,10 +31,19 @@ export const protect = async (req, res, next) => {
 };
 
 export const admin = (req, res, next) => {
-  if (req.user && req.user.userType === 'admin') {
+  const adminRoles = ['admin', 'superadmin', 'moderator', 'viewer'];
+  if (req.user && adminRoles.includes(req.user.userType)) {
     next();
   } else {
     res.status(403).json({ message: 'Admin access required' });
+  }
+};
+
+export const superadmin = (req, res, next) => {
+  if (req.user && req.user.userType === 'superadmin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Super Admin access required' });
   }
 };
 

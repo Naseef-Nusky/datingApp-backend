@@ -26,7 +26,7 @@ const User = sequelize.define(
       },
     },
     userType: {
-      type: DataTypes.ENUM('regular', 'talent', 'streamer', 'admin'),
+      type: DataTypes.ENUM('regular', 'talent', 'streamer', 'admin', 'superadmin', 'moderator', 'viewer'),
       defaultValue: 'regular',
     },
     isVerified: {
