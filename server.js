@@ -26,6 +26,7 @@ import safetyRoutes from './routes/safety.js';
 import streamerRoutes from './routes/streamer.js';
 import userStatusRoutes from './routes/userStatus.js';
 import agoraRoutes from './routes/agora.js';
+import adminRoutes from './routes/admin.js';
 
 dotenv.config();
 
@@ -94,6 +95,7 @@ app.use('/api/safety', safetyRoutes);
 app.use('/api/streamer', streamerRoutes);
 app.use('/api/user', userStatusRoutes);
 app.use('/api/agora', agoraRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections
