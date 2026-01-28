@@ -48,7 +48,7 @@ const Message = sequelize.define(
       field: 'media_url',
     },
     messageType: {
-      type: DataTypes.ENUM('text', 'image', 'video', 'voice', 'email', 'intro'),
+      type: DataTypes.ENUM('text', 'image', 'video', 'voice', 'email', 'intro', 'gift'),
       defaultValue: 'text',
       field: 'message_type',
     },

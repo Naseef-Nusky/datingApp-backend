@@ -1,20 +1,36 @@
 import express from 'express';
-import Gift from '../models/Gift.js';
-import GiftCatalog from '../models/GiftCatalog.js';
-import User from '../models/User.js';
-import CreditTransaction from '../models/CreditTransaction.js';
-import Notification from '../models/Notification.js';
-import Profile from '../models/Profile.js';
+import { Op } from 'sequelize';
+import { User, GiftCatalog, Gift, CreditTransaction, Notification, Chat, Message } from '../models/index.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
+const findOrCreateChat = async (user1Id, user2Id) => {
+  const [u1, u2] = [String(user1Id), String(user2Id)].sort();
+  let chat = await Chat.findOne({
+    where: {
+      [Op.or]: [
+        { user1Id: u1, user2Id: u2 },
+        { user1Id: u2, user2Id: u1 },
+      ],
+    },
+  });
+  if (!chat) {
+    chat = await Chat.create({ user1Id: u1, user2Id: u2 });
+  }
+  return chat;
+};
+
 // @route   GET /api/gifts/catalog
-// @desc    Get gift catalog
+// @desc    Get active gift catalog (for chat/email gift picker)
 // @access  Private
 router.get('/catalog', protect, async (req, res) => {
   try {
-    const gifts = await GiftCatalog.find({ isActive: true }).sort({ creditCost: 1 });
+    const gifts = await GiftCatalog.findAll({
+      where: { isActive: true },
+      order: [['creditCost', 'ASC']],
+      attributes: ['id', 'name', 'description', 'category', 'type', 'imageUrl', 'creditCost'],
+    });
     res.json(gifts);
   } catch (error) {
     console.error('Get catalog error:', error);
@@ -23,53 +39,89 @@ router.get('/catalog', protect, async (req, res) => {
 });
 
 // @route   POST /api/gifts/send
-// @desc    Send a gift
+// @desc    Send a gift (deducts credits for paid gifts; free if creditCost === 0)
 // @access  Private
 router.post('/send', protect, async (req, res) => {
   try {
-    const { receiverId, giftId, message, deliveryAddress } = req.body;
+    const { receiverId, giftId, message } = req.body;
 
     if (!receiverId || !giftId) {
       return res.status(400).json({ message: 'Receiver ID and Gift ID required' });
     }
 
-    const giftItem = await GiftCatalog.findById(giftId);
+    const giftItem = await GiftCatalog.findByPk(giftId);
     if (!giftItem || !giftItem.isActive) {
       return res.status(404).json({ message: 'Gift not found' });
     }
 
-    // Credit check removed - gifts are now free
-    const user = await User.findById(req.user._id);
+    const creditCost = parseInt(giftItem.creditCost, 10) || 0;
+    const senderId = req.user.id;
 
-    // Determine gift type
-    const giftType = giftItem.type === 'virtual' ? 'virtual' : 'physical';
+    if (creditCost > 0) {
+      const user = await User.findByPk(senderId, { attributes: ['id', 'credits'] });
+      if (!user) return res.status(401).json({ message: 'User not found' });
+      if ((user.credits || 0) < creditCost) {
+        return res.status(400).json({
+          message: 'Insufficient credits',
+          required: creditCost,
+          balance: user.credits || 0,
+        });
+      }
+      await user.decrement('credits', { by: creditCost });
+    }
 
-    // Create gift
+    const giftType = giftItem.type === 'physical' ? 'physical' : 'virtual';
     const gift = await Gift.create({
-      sender: req.user._id,
+      sender: senderId,
       receiver: receiverId,
       giftType,
       giftItem: giftId,
-      message,
-      deliveryAddress: giftType === 'physical' ? deliveryAddress : undefined,
-      creditsUsed: 0, // Gifts are now free
+      message: message || null,
+      creditsUsed: creditCost,
     });
 
-    // Credit transaction removed - gifts are now free
+    if (creditCost > 0) {
+      await CreditTransaction.create({
+        userId: senderId,
+        type: 'usage',
+        amount: -creditCost,
+        description: `Gift: ${giftItem.name}`,
+        relatedTo: 'gift',
+        relatedId: gift.id,
+      });
+    }
 
-    // Earnings removed - gifts are now free
-
-    // Create notification
     await Notification.create({
       userId: receiverId,
       type: 'gift_received',
       title: 'Gift Received',
       message: `You received a ${giftItem.name}`,
-      relatedId: gift._id,
+      relatedId: gift.id,
       relatedType: 'gift',
     });
 
-    res.status(201).json(gift);
+    // Create a chat message so the gift appears as a sticker/attachment in the thread
+    try {
+      const chat = await findOrCreateChat(senderId, receiverId);
+      await Message.create({
+        chatId: chat.id,
+        sender: senderId,
+        receiver: receiverId,
+        content: giftItem.name || '',
+        mediaUrl: giftItem.imageUrl || null,
+        messageType: 'gift',
+        creditsUsed: 0,
+      });
+    } catch (chatErr) {
+      console.warn('Gift chat message skipped:', chatErr.message);
+    }
+
+    const sent = await Gift.findByPk(gift.id, {
+      include: [
+        { model: GiftCatalog, as: 'giftItemData', attributes: ['id', 'name', 'imageUrl', 'creditCost'] },
+      ],
+    });
+    res.status(201).json(sent);
   } catch (error) {
     console.error('Send gift error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -81,11 +133,14 @@ router.post('/send', protect, async (req, res) => {
 // @access  Private
 router.get('/received', protect, async (req, res) => {
   try {
-    const gifts = await Gift.find({ receiver: req.user._id })
-      .populate('sender', 'email')
-      .populate('giftItem')
-      .sort({ createdAt: -1 });
-
+    const gifts = await Gift.findAll({
+      where: { receiver: req.user.id },
+      include: [
+        { model: User, as: 'senderData', attributes: ['id', 'email'] },
+        { model: GiftCatalog, as: 'giftItemData' },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
     res.json(gifts);
   } catch (error) {
     console.error('Get received gifts error:', error);
@@ -98,11 +153,14 @@ router.get('/received', protect, async (req, res) => {
 // @access  Private
 router.get('/sent', protect, async (req, res) => {
   try {
-    const gifts = await Gift.find({ sender: req.user._id })
-      .populate('receiver', 'email')
-      .populate('giftItem')
-      .sort({ createdAt: -1 });
-
+    const gifts = await Gift.findAll({
+      where: { sender: req.user.id },
+      include: [
+        { model: User, as: 'receiverData', attributes: ['id', 'email'] },
+        { model: GiftCatalog, as: 'giftItemData' },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
     res.json(gifts);
   } catch (error) {
     console.error('Get sent gifts error:', error);
@@ -111,7 +169,3 @@ router.get('/sent', protect, async (req, res) => {
 });
 
 export default router;
-
-
-
-

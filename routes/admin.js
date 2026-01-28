@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
-import { User, Profile, Report, WishlistCategory, WishlistProduct } from '../models/index.js';
+import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog } from '../models/index.js';
 import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Multer for wishlist product image: memory for Spaces, disk fallback
+// Multer for product/gift images: memory for Spaces, disk fallback
 const wishlistStorage = multer.memoryStorage();
 const wishlistUpload = multer({
   storage: wishlistStorage,
@@ -26,6 +26,7 @@ const wishlistUpload = multer({
     else cb(new Error('Only image files are allowed'), false);
   },
 });
+const giftImageUpload = wishlistUpload; // same config, folder set in saveGiftImage
 
 // ============================================
 // Admin Users Routes (for managing admin accounts)
@@ -668,6 +669,135 @@ async function saveProductImage(req, file) {
   const base = req.protocol + '://' + req.get('host');
   return `${base}/uploads/wishlist/${filename}`;
 }
+
+/** Save gift catalog image to Spaces (folder: gifts/) or local uploads/gifts */
+async function saveGiftImage(req, file) {
+  if (!file || !file.buffer) return null;
+  const spacesConfigured = !!(
+    process.env.DO_SPACES_ENDPOINT &&
+    process.env.DO_SPACES_KEY &&
+    process.env.DO_SPACES_SECRET &&
+    process.env.DO_SPACES_NAME
+  );
+  if (spacesConfigured) {
+    return await uploadToSpaces(file.buffer, file.mimetype, 'gifts', file.originalname || '');
+  }
+  const ext = (file.originalname || '').split('.').pop() || 'jpg';
+  const filename = `${uuidv4()}.${ext}`;
+  const dir = path.join(__dirname, '..', 'uploads', 'gifts');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, filename), file.buffer);
+  const base = req.protocol + '://' + req.get('host');
+  return `${base}/uploads/gifts/${filename}`;
+}
+
+// ============================================
+// Virtual Gifts (Gift Catalog) – admin CRUD
+// ============================================
+
+router.get('/gift-catalog', protect, admin, async (req, res) => {
+  try {
+    const gifts = await GiftCatalog.findAll({
+      order: [['creditCost', 'ASC'], ['name', 'ASC']],
+    });
+    res.json({ gifts });
+  } catch (error) {
+    console.error('Error fetching gift catalog:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post(
+  '/gift-catalog',
+  protect,
+  admin,
+  giftImageUpload.single('image'),
+  [
+    body('name').trim().notEmpty().withMessage('Name is required'),
+    body('category').isIn(['cake', 'flower', 'ceremony', 'jewelry', 'other']),
+    body('type').optional().isIn(['virtual', 'physical', 'both']),
+    body('creditCost').optional().isInt({ min: 0 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { name, description, category, type, creditCost, isActive } = req.body;
+      let imageUrl = (req.body.imageUrl && req.body.imageUrl.trim()) || null;
+      if (req.file) {
+        const url = await saveGiftImage(req, req.file);
+        if (url) imageUrl = url;
+      }
+      const gift = await GiftCatalog.create({
+        name: name.trim(),
+        description: (description || '').trim() || null,
+        category: category || 'other',
+        type: type || 'virtual',
+        imageUrl,
+        creditCost: creditCost != null ? parseInt(creditCost, 10) : 0,
+        isActive: isActive !== undefined ? !!isActive : true,
+      });
+      res.status(201).json({ gift });
+    } catch (error) {
+      console.error('Error creating gift:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.put(
+  '/gift-catalog/:id',
+  protect,
+  admin,
+  giftImageUpload.single('image'),
+  [
+    body('name').optional().trim().notEmpty(),
+    body('category').optional().isIn(['cake', 'flower', 'ceremony', 'jewelry', 'other']),
+    body('type').optional().isIn(['virtual', 'physical', 'both']),
+    body('creditCost').optional().isInt({ min: 0 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const gift = await GiftCatalog.findByPk(req.params.id);
+      if (!gift) return res.status(404).json({ message: 'Gift not found' });
+      if (req.body.name) gift.name = req.body.name.trim();
+      if (req.body.description !== undefined) gift.description = (req.body.description || '').trim() || null;
+      if (req.body.category) gift.category = req.body.category;
+      if (req.body.type) gift.type = req.body.type;
+      if (req.body.creditCost != null) gift.creditCost = parseInt(req.body.creditCost, 10);
+      if (req.body.isActive !== undefined) gift.isActive = !!req.body.isActive;
+      if (req.file) {
+        const url = await saveGiftImage(req, req.file);
+        if (url) gift.imageUrl = url;
+      } else if (req.body.imageUrl !== undefined) {
+        gift.imageUrl = (req.body.imageUrl || '').trim() || null;
+      }
+      await gift.save();
+      res.json({ gift });
+    } catch (error) {
+      console.error('Error updating gift:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.delete('/gift-catalog/:id', protect, admin, async (req, res) => {
+  try {
+    const gift = await GiftCatalog.findByPk(req.params.id);
+    if (!gift) return res.status(404).json({ message: 'Gift not found' });
+    await gift.destroy();
+    res.json({ message: 'Gift deleted' });
+  } catch (error) {
+    console.error('Error deleting gift:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ============================================
+// Wishlist (categories & products)
+// ============================================
 
 router.post(
   '/wishlist-products',
