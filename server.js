@@ -89,7 +89,10 @@ app.use('/api/messages', (req, res, next) => {
   next();
 }, messageRoutes);
 app.use('/api/stories', storyRoutes);
-app.use('/api/gifts', giftRoutes);
+app.use('/api/gifts', (req, res, next) => {
+  req.io = io;
+  next();
+}, giftRoutes);
 app.use('/api/credits', creditRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/safety', safetyRoutes);

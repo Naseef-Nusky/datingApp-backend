@@ -101,9 +101,10 @@ router.post('/send', protect, async (req, res) => {
     });
 
     // Create a chat message so the gift appears as a sticker/attachment in the thread
+    let chat = null;
     try {
-      const chat = await findOrCreateChat(senderId, receiverId);
-      await Message.create({
+      chat = await findOrCreateChat(senderId, receiverId);
+      const message = await Message.create({
         chatId: chat.id,
         sender: senderId,
         receiver: receiverId,
@@ -112,6 +113,34 @@ router.post('/send', protect, async (req, res) => {
         messageType: 'gift',
         creditsUsed: 0,
       });
+      
+      // Update chat's last message + unread count so contact list + notification badges update
+      if (chat && chat.id) {
+        try {
+          await chat.update({
+            lastMessage: giftItem.name || '',
+            lastMessageAt: new Date(),
+          });
+
+          // Increment unread count for receiver (same logic as regular messages)
+          if (chat.user1Id === receiverId) {
+            await chat.increment('unreadCountUser1');
+          } else {
+            await chat.increment('unreadCountUser2');
+          }
+        } catch (chatUpdateError) {
+          console.error('Error updating chat after gift:', chatUpdateError.message);
+        }
+      }
+
+      // Real-time: notify receiver so "My Contacts" sidebar updates (e.g. "X sent a gift")
+      if (req.io) {
+        const receiverIdStr = String(receiverId);
+        const senderIdStr = String(senderId);
+        req.io.to(`user-${receiverIdStr}`).emit('new-message', { messageType: 'gift', senderId, receiverId });
+        req.io.to(`user-${receiverIdStr}`).emit('contact-update', { userId: senderId, chatId: chat?.id || null });
+        req.io.to(`user-${senderIdStr}`).emit('contact-update', { userId: receiverId, chatId: chat?.id || null });
+      }
     } catch (chatErr) {
       console.warn('Gift chat message skipped:', chatErr.message);
     }

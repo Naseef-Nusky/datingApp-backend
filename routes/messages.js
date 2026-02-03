@@ -215,9 +215,14 @@ router.post('/', protect, async (req, res) => {
         });
         console.log(`📨 Emitted new-message event to user-${receiverIdStr}`);
         
-        // Also emit contact-update event to refresh contacts list
+        // Also emit contact-update to receiver and sender so both contact lists refresh in real time
         req.io.to(`user-${receiverIdStr}`).emit('contact-update', {
           userId: req.user.id,
+          chatId: chat?.id || null,
+        });
+        const senderIdStr = String(req.user.id);
+        req.io.to(`user-${senderIdStr}`).emit('contact-update', {
+          userId: receiverId,
           chatId: chat?.id || null,
         });
       } catch (socketError) {
