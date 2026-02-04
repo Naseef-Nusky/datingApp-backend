@@ -697,7 +697,9 @@ async function saveGiftImage(req, file) {
 
 router.get('/gift-catalog', protect, admin, async (req, res) => {
   try {
+    const includeInactive = req.query.includeInactive === '1';
     const gifts = await GiftCatalog.findAll({
+      where: includeInactive ? {} : { isActive: true },
       order: [['creditCost', 'ASC'], ['name', 'ASC']],
     });
     res.json({ gifts });
@@ -783,12 +785,15 @@ router.put(
   }
 );
 
+// Do NOT use destroy() – gift_catalogs is referenced by gifts table (sent gift history).
+// Soft delete only: set isActive = false so it disappears from catalog but history stays valid.
 router.delete('/gift-catalog/:id', protect, admin, async (req, res) => {
   try {
     const gift = await GiftCatalog.findByPk(req.params.id);
     if (!gift) return res.status(404).json({ message: 'Gift not found' });
-    await gift.destroy();
-    res.json({ message: 'Gift deleted' });
+    gift.set('isActive', false);
+    await gift.save();
+    res.json({ message: 'Gift removed from catalog' });
   } catch (error) {
     console.error('Error deleting gift:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
