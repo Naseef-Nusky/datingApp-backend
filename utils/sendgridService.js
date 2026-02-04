@@ -6,8 +6,8 @@ if (process.env.SENDGRID_API_KEY) {
 }
 
 // Get FROM email - must be verified in SendGrid
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@nexdating.com';
-const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Nexdating Team';
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
+const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating Team';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const LOGO_URL = 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/Logo.jpeg';
 
@@ -147,7 +147,7 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
 <body>
   <div class="container">
     <div class="header">
-      <img src="${logoUrl}" alt="Nexdating.com" class="header-logo" style="max-width: 220px; height: auto; margin: 0 auto 10px auto; display: block; width: auto;" onerror="this.style.display='none';" />
+      <img src="${logoUrl}" alt="Vantage Dating" class="header-logo" style="max-width: 220px; height: auto; margin: 0 auto 10px auto; display: block; width: auto;" onerror="this.style.display='none';" />
       <h1 style="margin: 10px 0 0 0; font-size: 18px; font-weight: 400;">Your next date starts here.</h1>
     </div>
     <div class="content">
@@ -155,10 +155,10 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
     </div>
     <div class="footer">
       <p style="margin: 0 0 5px 0; color: #4B5563;">Meet awesome people</p>
-      <p style="margin: 0 0 15px 0; color: #4B5563; font-weight: 600;">on <strong>Nexdating.com</strong></p>
+      <p style="margin: 0 0 15px 0; color: #4B5563; font-weight: 600;">on <strong>Vantage Dating</strong></p>
       ${unsubscribeUrl ? `<p style="margin-top: 15px;"><a href="${unsubscribeUrl}" style="color: #FF6B35; text-decoration: none;">Manage Email Preferences</a></p>` : ''}
       <p style="margin-top: 15px; font-size: 10px; color: #999;">
-        This is an automated notification from Nexdating.com
+        This is an automated notification from Vantage Dating
       </p>
     </div>
   </div>
@@ -321,9 +321,9 @@ export const getDailyDigestTemplate = (userName, stats) => {
   const { newMatches = 0, newMessages = 0, profileViews = 0, unreadMessages = 0 } = stats;
 
   const content = `
-    <h2 style="color: #333; margin-top: 0;">Your Nexdating Daily Digest 📊</h2>
+    <h2 style="color: #333; margin-top: 0;">Your Vantage Dating Daily Digest 📊</h2>
     <p>Hi ${userName},</p>
-    <p>Here's what happened on Nexdating.com today:</p>
+    <p>Here's what happened on Vantage Dating today:</p>
     
     <div class="stats-grid">
       <div class="stat-box">

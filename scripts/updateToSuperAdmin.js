@@ -12,7 +12,7 @@ const updateToSuperAdmin = async () => {
     console.log('✅ Database connected');
 
     // Admin email from env or default
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@nexdating.com';
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@vantagedating.com';
 
     // Find the admin user
     const admin = await User.findOne({ 

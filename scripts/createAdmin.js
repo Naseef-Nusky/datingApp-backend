@@ -12,7 +12,7 @@ const createAdmin = async () => {
     console.log('✅ Database connected');
 
     // Admin credentials
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@nexdating.com';
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@vantagedating.com';
     const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123!';
     const adminFirstName = process.env.ADMIN_FIRST_NAME || 'Admin';
     const adminLastName = process.env.ADMIN_LAST_NAME || 'User';
