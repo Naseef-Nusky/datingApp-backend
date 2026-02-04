@@ -18,12 +18,13 @@ const SUBSCRIPTION_PLANS = {
 // @access  Private
 router.get('/balance', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findByPk(req.user.id, { attributes: ['credits', 'subscriptionPlan', 'subscriptionExpires', 'monthlyCreditRefill'] });
+    if (!user) return res.status(404).json({ message: 'User not found' });
     res.json({
-      credits: user.credits,
+      credits: user.credits ?? 0,
       subscriptionPlan: user.subscriptionPlan,
       subscriptionExpires: user.subscriptionExpires,
-      monthlyCreditRefill: user.monthlyCreditRefill,
+      monthlyCreditRefill: user.monthlyCreditRefill ?? 0,
     });
   } catch (error) {
     console.error('Get balance error:', error);
@@ -36,23 +37,24 @@ router.get('/balance', protect, async (req, res) => {
 // @access  Private
 router.get('/transactions', protect, async (req, res) => {
   try {
-    const { limit = 50, page = 1 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const offset = (page - 1) * limit;
 
-    const transactions = await CreditTransaction.find({ userId: req.user._id })
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(skip);
-
-    const total = await CreditTransaction.countDocuments({ userId: req.user._id });
+    const { count, rows: transactions } = await CreditTransaction.findAndCountAll({
+      where: { userId: req.user.id },
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+    });
 
     res.json({
       transactions,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit)),
+        page,
+        limit,
+        total: count,
+        pages: Math.ceil(count / limit),
       },
     });
   } catch (error) {
@@ -72,34 +74,34 @@ router.post('/subscribe', protect, async (req, res) => {
       return res.status(400).json({ message: 'Invalid subscription plan' });
     }
 
-    const user = await User.findById(req.user._id);
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
     const planDetails = SUBSCRIPTION_PLANS[plan];
 
-    // Set subscription
-    user.subscriptionPlan = plan;
-    user.monthlyCreditRefill = planDetails.credits;
-    user.subscriptionExpires = new Date();
-    user.subscriptionExpires.setMonth(user.subscriptionExpires.getMonth() + 1);
+    const expires = new Date();
+    expires.setMonth(expires.getMonth() + 1);
 
-    // Add initial credits
-    user.credits += planDetails.credits;
+    await user.update({
+      subscriptionPlan: plan,
+      monthlyCreditRefill: planDetails.credits,
+      subscriptionExpires: expires,
+      credits: (user.credits || 0) + planDetails.credits,
+    });
 
-    await user.save();
-
-    // Record transaction
     await CreditTransaction.create({
-      userId: req.user._id,
+      userId: req.user.id,
       type: 'subscription',
       amount: planDetails.credits,
       description: `Subscription: ${plan}`,
       relatedTo: 'subscription',
     });
 
+    const updated = await User.findByPk(req.user.id, { attributes: ['credits', 'subscriptionPlan'] });
     res.json({
       message: 'Subscription activated',
-      subscriptionPlan: user.subscriptionPlan,
+      subscriptionPlan: updated.subscriptionPlan,
       creditsAdded: planDetails.credits,
-      totalCredits: user.credits,
+      totalCredits: updated.credits ?? 0,
     });
   } catch (error) {
     console.error('Subscribe error:', error);
@@ -112,12 +114,13 @@ router.post('/subscribe', protect, async (req, res) => {
 // @access  Private
 router.post('/cancel-subscription', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
-    user.subscriptionPlan = 'free';
-    user.monthlyCreditRefill = 0;
-    user.subscriptionExpires = null;
-    await user.save();
-
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    await user.update({
+      subscriptionPlan: 'free',
+      monthlyCreditRefill: 0,
+      subscriptionExpires: null,
+    });
     res.json({ message: 'Subscription cancelled' });
   } catch (error) {
     console.error('Cancel subscription error:', error);
@@ -126,25 +129,24 @@ router.post('/cancel-subscription', protect, async (req, res) => {
 });
 
 // @route   POST /api/credits/purchase
-// @desc    Purchase credits directly
+// @desc    Purchase credits directly (or refill pack: amount = credits to add)
 // @access  Private
 router.post('/purchase', protect, async (req, res) => {
   try {
-    const { amount, paymentMethod } = req.body;
+    const amount = parseInt(req.body.amount, 10);
+    const paymentMethod = req.body.paymentMethod || 'refill';
 
     if (!amount || amount <= 0) {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 
-    // In production, integrate with payment gateway (Stripe, PayPal, etc.)
-    // For now, just add credits
-    const user = await User.findById(req.user._id);
-    user.credits += amount;
-    await user.save();
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const newCredits = (user.credits || 0) + amount;
+    await user.update({ credits: newCredits });
 
-    // Record transaction
     await CreditTransaction.create({
-      userId: req.user._id,
+      userId: req.user.id,
       type: 'purchase',
       amount,
       description: `Credit purchase via ${paymentMethod}`,
@@ -154,7 +156,7 @@ router.post('/purchase', protect, async (req, res) => {
     res.json({
       message: 'Credits purchased',
       creditsAdded: amount,
-      totalCredits: user.credits,
+      totalCredits: newCredits,
     });
   } catch (error) {
     console.error('Purchase credits error:', error);
