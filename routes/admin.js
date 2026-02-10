@@ -811,7 +811,7 @@ router.get('/gift-orders', protect, admin, async (req, res) => {
   try {
     const { status } = req.query;
     const where = { giftType: 'physical' };
-    const allowedStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const allowedStatuses = ['pending', 'processing', 'delivered', 'cancelled'];
     if (status && allowedStatuses.includes(status)) {
       where.deliveryStatus = status;
     }
@@ -869,7 +869,7 @@ router.put(
   [
     body('deliveryStatus')
       .optional()
-      .isIn(['pending', 'processing', 'shipped', 'delivered', 'cancelled']),
+      .isIn(['pending', 'processing', 'delivered', 'cancelled']),
   ],
   async (req, res) => {
     try {
