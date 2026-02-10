@@ -1,6 +1,6 @@
 import express from 'express';
 import { Op } from 'sequelize';
-import { User, GiftCatalog, Gift, CreditTransaction, Notification, Chat, Message } from '../models/index.js';
+import { User, GiftCatalog, Gift, CreditTransaction, Notification, Chat, Message, PresentCategory } from '../models/index.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -21,13 +21,38 @@ const findOrCreateChat = async (user1Id, user2Id) => {
   return chat;
 };
 
+// @route   GET /api/gifts/present-categories
+// @desc    Get present category names (for displaying name not slug in Present Shop)
+// @access  Private
+router.get('/present-categories', protect, async (req, res) => {
+  try {
+    const categories = await PresentCategory.findAll({
+      where: { isActive: true },
+      order: [['sortOrder', 'ASC'], ['name', 'ASC']],
+      attributes: ['id', 'name', 'slug'],
+    });
+    res.json({ categories });
+  } catch (error) {
+    console.error('Get present categories error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET /api/gifts/catalog
-// @desc    Get active gift catalog (for chat/email gift picker)
+// @desc    Get active gift catalog (for chat/email gift picker / present shop)
 // @access  Private
 router.get('/catalog', protect, async (req, res) => {
   try {
+    const { type } = req.query;
+    const where = { isActive: true };
+    if (type === 'virtual') {
+      where.type = 'virtual';
+    } else if (type === 'physical') {
+      where.type = 'physical';
+    }
+
     const gifts = await GiftCatalog.findAll({
-      where: { isActive: true },
+      where,
       order: [['creditCost', 'ASC']],
       attributes: ['id', 'name', 'description', 'category', 'type', 'imageUrl', 'creditCost'],
     });
@@ -153,6 +178,13 @@ router.post('/send', protect, async (req, res) => {
     res.status(201).json(sent);
   } catch (error) {
     console.error('Send gift error:', error);
+    const isFk = error.name === 'SequelizeForeignKeyConstraintError';
+    const isValidation = error.name === 'SequelizeValidationError';
+    if (isFk || isValidation) {
+      return res.status(400).json({
+        message: isFk ? 'Invalid receiver or gift. Please refresh and try again.' : 'Validation failed.',
+      });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 });

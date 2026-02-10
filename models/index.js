@@ -11,6 +11,7 @@ import Gift from './Gift.js';
 import GiftCatalog from './GiftCatalog.js';
 import WishlistCategory from './WishlistCategory.js';
 import WishlistProduct from './WishlistProduct.js';
+import PresentCategory from './PresentCategory.js';
 import CreditTransaction from './CreditTransaction.js';
 import Notification from './Notification.js';
 import Report from './Report.js';
@@ -82,6 +83,7 @@ export {
   GiftCatalog,
   WishlistCategory,
   WishlistProduct,
+  PresentCategory,
   CreditTransaction,
   Notification,
   Report,

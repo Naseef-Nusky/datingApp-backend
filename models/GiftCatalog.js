@@ -18,7 +18,8 @@ const GiftCatalog = sequelize.define(
       allowNull: true,
     },
     category: {
-      type: DataTypes.ENUM('cake', 'flower', 'ceremony', 'jewelry', 'other'),
+      // Free-form category name (e.g. Flowers, Pets, Presents)
+      type: DataTypes.STRING,
       allowNull: false,
     },
     type: {

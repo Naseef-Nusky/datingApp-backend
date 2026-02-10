@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
-import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog } from '../models/index.js';
+import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog, Gift, Notification, PresentCategory } from '../models/index.js';
 import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
@@ -716,7 +716,7 @@ router.post(
   giftImageUpload.single('image'),
   [
     body('name').trim().notEmpty().withMessage('Name is required'),
-    body('category').isIn(['cake', 'flower', 'ceremony', 'jewelry', 'other']),
+    body('category').trim().notEmpty().withMessage('Category is required'),
     body('type').optional().isIn(['virtual', 'physical', 'both']),
     body('creditCost').optional().isInt({ min: 0 }),
   ],
@@ -754,7 +754,7 @@ router.put(
   giftImageUpload.single('image'),
   [
     body('name').optional().trim().notEmpty(),
-    body('category').optional().isIn(['cake', 'flower', 'ceremony', 'jewelry', 'other']),
+    body('category').optional().trim().notEmpty(),
     body('type').optional().isIn(['virtual', 'physical', 'both']),
     body('creditCost').optional().isInt({ min: 0 }),
   ],
@@ -801,6 +801,149 @@ router.delete('/gift-catalog/:id', protect, admin, async (req, res) => {
 });
 
 // ============================================
+// Gift Orders (physical presents)
+// ============================================
+
+// @route   GET /api/admin/gift-orders
+// @desc    List physical gift orders (presents) for delivery handling
+// @access  Admin
+router.get('/gift-orders', protect, admin, async (req, res) => {
+  try {
+    const { status } = req.query;
+    const where = { giftType: 'physical' };
+    const allowedStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+    if (status && allowedStatuses.includes(status)) {
+      where.deliveryStatus = status;
+    }
+
+    const orders = await Gift.findAll({
+      where,
+      include: [
+        {
+          model: User,
+          as: 'senderData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'age', 'gender', 'location'],
+            },
+          ],
+        },
+        {
+          model: User,
+          as: 'receiverData',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'age', 'gender', 'location'],
+            },
+          ],
+        },
+        {
+          model: GiftCatalog,
+          as: 'giftItemData',
+          attributes: ['id', 'name', 'imageUrl', 'creditCost', 'category', 'type'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    res.json({ orders });
+  } catch (error) {
+    console.error('Error fetching gift orders:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/gift-orders/:id/status
+// @desc    Update delivery status / address for a physical gift order
+// @access  Admin
+router.put(
+  '/gift-orders/:id/status',
+  protect,
+  admin,
+  [
+    body('deliveryStatus')
+      .optional()
+      .isIn(['pending', 'processing', 'shipped', 'delivered', 'cancelled']),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const gift = await Gift.findByPk(req.params.id, {
+        include: [{ model: GiftCatalog, as: 'giftItemData', attributes: ['id', 'name'] }],
+      });
+      if (!gift) return res.status(404).json({ message: 'Order not found' });
+      if (gift.giftType !== 'physical') {
+        return res.status(400).json({ message: 'Only physical presents can be updated via this endpoint' });
+      }
+
+      const { deliveryStatus, deliveryAddress } = req.body;
+
+      if (deliveryStatus) {
+        gift.deliveryStatus = deliveryStatus;
+        if (deliveryStatus === 'delivered') {
+          gift.isDelivered = true;
+          gift.deliveredAt = new Date();
+        } else if (deliveryStatus === 'pending') {
+          gift.isDelivered = false;
+          gift.deliveredAt = null;
+        }
+      }
+
+      if (deliveryAddress !== undefined) {
+        // Allow either JSON object or JSON string
+        if (typeof deliveryAddress === 'string') {
+          try {
+            gift.deliveryAddress = JSON.parse(deliveryAddress);
+          } catch {
+            gift.deliveryAddress = { raw: deliveryAddress };
+          }
+        } else {
+          gift.deliveryAddress = deliveryAddress;
+        }
+      }
+
+      await gift.save();
+
+      // Notify receiver about status change
+      if (deliveryStatus) {
+        const title = 'Present delivery update';
+        const giftName = gift.giftItemData?.name || 'your present';
+        const prettyStatus = deliveryStatus.charAt(0).toUpperCase() + deliveryStatus.slice(1);
+        await Notification.create({
+          userId: gift.receiver,
+          type: 'system',
+          title,
+          message: `${giftName} is now ${prettyStatus.toLowerCase()}.`,
+          relatedId: gift.id,
+          relatedType: 'gift',
+        });
+      }
+
+      const updated = await Gift.findByPk(gift.id, {
+        include: [
+          { model: User, as: 'senderData', attributes: ['id', 'email'] },
+          { model: User, as: 'receiverData', attributes: ['id', 'email'] },
+          { model: GiftCatalog, as: 'giftItemData', attributes: ['id', 'name', 'imageUrl', 'creditCost', 'category', 'type'] },
+        ],
+      });
+
+      res.json({ order: updated });
+    } catch (error) {
+      console.error('Error updating gift order status:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// ============================================
 // Wishlist (categories & products)
 // ============================================
 
@@ -842,6 +985,121 @@ router.post(
     }
   }
 );
+
+// ============================================
+// Present Categories (for physical presents)
+// ============================================
+
+// @route   GET /api/admin/present-categories
+// @desc    Get all present categories
+// @access  Admin
+router.get('/present-categories', protect, admin, async (req, res) => {
+  try {
+    const categories = await PresentCategory.findAll({
+      order: [['sortOrder', 'ASC'], ['name', 'ASC']],
+    });
+    res.json({ categories });
+  } catch (error) {
+    console.error('Error fetching present categories:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/present-categories
+// @desc    Create a new present category
+// @access  Admin
+router.post(
+  '/present-categories',
+  protect,
+  admin,
+  [
+    body('name').trim().notEmpty(),
+    body('slug').optional().trim(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const { name, slug, sortOrder } = req.body;
+      const finalSlug = (slug || name).toLowerCase().replace(/\s+/g, '-');
+
+      const existing = await PresentCategory.findOne({ where: { slug: finalSlug } });
+      if (existing) {
+        return res.status(400).json({ message: 'Slug already in use' });
+      }
+
+      const category = await PresentCategory.create({
+        name: name.trim(),
+        slug: finalSlug,
+        sortOrder: sortOrder != null ? parseInt(sortOrder, 10) : 0,
+      });
+
+      res.status(201).json({ category });
+    } catch (error) {
+      console.error('Error creating present category:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   PUT /api/admin/present-categories/:id
+// @desc    Update a present category
+// @access  Admin
+router.put(
+  '/present-categories/:id',
+  protect,
+  admin,
+  [
+    body('name').optional().trim().notEmpty(),
+    body('slug').optional().trim().notEmpty(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const category = await PresentCategory.findByPk(req.params.id);
+      if (!category) return res.status(404).json({ message: 'Category not found' });
+
+      const { name, slug, sortOrder, isActive } = req.body;
+      if (name) category.name = name.trim();
+      if (slug) category.slug = slug.trim().toLowerCase().replace(/\s+/g, '-');
+      if (sortOrder != null) category.sortOrder = parseInt(sortOrder, 10) || 0;
+      if (isActive !== undefined) category.isActive = !!isActive;
+
+      await category.save();
+      res.json({ category });
+    } catch (error) {
+      console.error('Error updating present category:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   DELETE /api/admin/present-categories/:id
+// @desc    Delete a present category (only if not used by any present)
+// @access  Admin
+router.delete('/present-categories/:id', protect, admin, async (req, res) => {
+  try {
+    const category = await PresentCategory.findByPk(req.params.id);
+    if (!category) return res.status(404).json({ message: 'Category not found' });
+
+    // Prevent delete if any present uses this category name
+    const inUseCount = await GiftCatalog.count({ where: { category: category.name } });
+    if (inUseCount > 0) {
+      return res.status(400).json({
+        message: 'Cannot delete category while presents are using it.',
+      });
+    }
+
+    await category.destroy();
+    res.json({ message: 'Category deleted' });
+  } catch (error) {
+    console.error('Error deleting present category:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 
 router.put(
   '/wishlist-products/:id',
