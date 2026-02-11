@@ -18,6 +18,10 @@ const PresentCategory = sequelize.define(
       allowNull: false,
       unique: true,
     },
+    imageUrl: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     sortOrder: {
       type: DataTypes.INTEGER,
       defaultValue: 0,

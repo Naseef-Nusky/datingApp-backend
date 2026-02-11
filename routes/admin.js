@@ -691,6 +691,27 @@ async function saveGiftImage(req, file) {
   return `${base}/uploads/gifts/${filename}`;
 }
 
+/** Save present category image to Spaces (folder: present-categories/) or local uploads/present-categories */
+async function saveCategoryImage(req, file) {
+  if (!file || !file.buffer) return null;
+  const spacesConfigured = !!(
+    process.env.DO_SPACES_ENDPOINT &&
+    process.env.DO_SPACES_KEY &&
+    process.env.DO_SPACES_SECRET &&
+    process.env.DO_SPACES_NAME
+  );
+  if (spacesConfigured) {
+    return await uploadToSpaces(file.buffer, file.mimetype, 'present-categories', file.originalname || '');
+  }
+  const ext = (file.originalname || '').split('.').pop() || 'jpg';
+  const filename = `${uuidv4()}.${ext}`;
+  const dir = path.join(__dirname, '..', 'uploads', 'present-categories');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, filename), file.buffer);
+  const base = req.protocol + '://' + req.get('host');
+  return `${base}/uploads/present-categories/${filename}`;
+}
+
 // ============================================
 // Virtual Gifts (Gift Catalog) – admin CRUD
 // ============================================
@@ -1006,12 +1027,13 @@ router.get('/present-categories', protect, admin, async (req, res) => {
 });
 
 // @route   POST /api/admin/present-categories
-// @desc    Create a new present category
+// @desc    Create a new present category (optional image)
 // @access  Admin
 router.post(
   '/present-categories',
   protect,
   admin,
+  wishlistUpload.single('image'),
   [
     body('name').trim().notEmpty(),
     body('slug').optional().trim(),
@@ -1029,9 +1051,16 @@ router.post(
         return res.status(400).json({ message: 'Slug already in use' });
       }
 
+      let imageUrl = (req.body.imageUrl && req.body.imageUrl.trim()) || null;
+      if (req.file) {
+        const url = await saveCategoryImage(req, req.file);
+        if (url) imageUrl = url;
+      }
+
       const category = await PresentCategory.create({
         name: name.trim(),
         slug: finalSlug,
+        imageUrl,
         sortOrder: sortOrder != null ? parseInt(sortOrder, 10) : 0,
       });
 
@@ -1044,12 +1073,13 @@ router.post(
 );
 
 // @route   PUT /api/admin/present-categories/:id
-// @desc    Update a present category
+// @desc    Update a present category (optional image)
 // @access  Admin
 router.put(
   '/present-categories/:id',
   protect,
   admin,
+  wishlistUpload.single('image'),
   [
     body('name').optional().trim().notEmpty(),
     body('slug').optional().trim().notEmpty(),
@@ -1067,6 +1097,13 @@ router.put(
       if (slug) category.slug = slug.trim().toLowerCase().replace(/\s+/g, '-');
       if (sortOrder != null) category.sortOrder = parseInt(sortOrder, 10) || 0;
       if (isActive !== undefined) category.isActive = !!isActive;
+
+      if (req.file) {
+        const url = await saveCategoryImage(req, req.file);
+        if (url) category.imageUrl = url;
+      } else if (req.body.imageUrl !== undefined) {
+        category.imageUrl = (req.body.imageUrl || '').trim() || null;
+      }
 
       await category.save();
       res.json({ category });

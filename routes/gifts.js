@@ -29,7 +29,7 @@ router.get('/present-categories', protect, async (req, res) => {
     const categories = await PresentCategory.findAll({
       where: { isActive: true },
       order: [['sortOrder', 'ASC'], ['name', 'ASC']],
-      attributes: ['id', 'name', 'slug'],
+      attributes: ['id', 'name', 'slug', 'imageUrl'],
     });
     res.json({ categories });
   } catch (error) {
@@ -64,7 +64,7 @@ router.get('/catalog', protect, async (req, res) => {
 });
 
 // @route   POST /api/gifts/send
-// @desc    Send a gift (deducts credits for paid gifts; free if creditCost === 0)
+// @desc    Send a gift (virtual or physical). Deducts credits when catalog creditCost > 0.
 // @access  Private
 router.post('/send', protect, async (req, res) => {
   try {
