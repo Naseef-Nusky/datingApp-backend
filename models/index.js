@@ -16,6 +16,7 @@ import CreditTransaction from './CreditTransaction.js';
 import Notification from './Notification.js';
 import Report from './Report.js';
 import Block from './Block.js';
+import SystemSetting from './SystemSetting.js';
 
 // Define associations
 User.hasOne(Profile, { foreignKey: 'userId', as: 'profile' });
@@ -88,6 +89,7 @@ export {
   Notification,
   Report,
   Block,
+  SystemSetting,
 };
 
 

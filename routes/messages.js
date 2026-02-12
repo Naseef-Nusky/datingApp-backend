@@ -16,6 +16,7 @@ import { uploadToSpaces } from '../utils/spacesUpload.js';
 import { sendEmail, sendEmailNotification } from '../utils/emailService.js';
 import { sendMessageNotification } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
+import { getCreditSettings } from '../utils/creditSettings.js';
 
 const router = express.Router();
 
@@ -33,11 +34,15 @@ const upload = multer({
   },
 });
 
-// Credit costs - REMOVED: All messages are now free
-const CREDIT_COSTS = {
-  chat: 0,
-  email: 0,
-  intro: 0,
+// Helper to get current chat message credit cost (managed via CRM)
+const getChatMessageCost = async () => {
+  try {
+    const settings = await getCreditSettings();
+    return settings.chatMessage || 0;
+  } catch (error) {
+    console.error('Error getting chat message credit cost:', error.message);
+    return 0;
+  }
 };
 
 // Helper function to find or create chat between two users
@@ -136,8 +141,35 @@ router.post('/', protect, async (req, res) => {
       chat = null;
     }
 
-    // Credit handling - REMOVED: All messages are now free
+    // Credit handling for regular chat messages (configured via CRM)
     let creditsUsed = 0;
+
+    // Charge credits only for interactive chat messages (not emails, intros, gifts, etc.)
+    const nonChargeableTypes = ['email', 'intro', 'gift'];
+    const effectiveType = messageType === 'chat' ? 'text' : messageType;
+    const isChargeableChat = !nonChargeableTypes.includes(effectiveType);
+
+    if (isChargeableChat) {
+      const costPerMessage = await getChatMessageCost();
+      if (costPerMessage > 0) {
+        const user = await User.findByPk(req.user.id, { attributes: ['id', 'credits'] });
+        if (!user) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+
+        const currentCredits = user.credits || 0;
+        if (currentCredits < costPerMessage) {
+          return res.status(400).json({
+            message: 'Insufficient credits',
+            required: costPerMessage,
+            balance: currentCredits,
+          });
+        }
+
+        await user.decrement('credits', { by: costPerMessage });
+        creditsUsed = costPerMessage;
+      }
+    }
 
     // Create message
     // For media messages, don't put placeholder text in content - keep it empty or use actual text if provided
@@ -146,8 +178,8 @@ router.post('/', protect, async (req, res) => {
       receiver: receiverId,
       content: mediaUrl ? (content || '') : content, // Only use content if it's not a media message, or if user provided text with media
       mediaUrl: mediaUrl || null,
-      messageType: messageType === 'chat' ? 'text' : messageType,
-      // Store how many credits were actually used for this message (0 for normal chat/media)
+      messageType: effectiveType,
+      // Store how many credits were actually used for this message (0 when feature is free)
       creditsUsed,
     };
 
@@ -161,6 +193,22 @@ router.post('/', protect, async (req, res) => {
 
     const message = await Message.create(messageData);
     console.log(`✅ Message created with ID: ${message.id}, sender: ${message.sender}, receiver: ${message.receiver}`);
+
+    // Record credit transaction if any credits were used
+    if (creditsUsed > 0) {
+      try {
+        await CreditTransaction.create({
+          userId: req.user.id,
+          type: 'usage',
+          amount: -creditsUsed,
+          description: 'Chat message',
+          relatedTo: 'message',
+          relatedId: message.id,
+        });
+      } catch (txError) {
+        console.error('Error creating credit transaction for message:', txError);
+      }
+    }
 
     // Update chat's last message and timestamp (if chat exists)
     if (chat && chat.id) {

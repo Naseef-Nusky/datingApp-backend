@@ -11,7 +11,10 @@ import connectDB from './config/database.js';
 import './models/index.js';
 import CallRequest from './models/CallRequest.js';
 import Notification from './models/Notification.js';
+import User from './models/User.js';
+import CreditTransaction from './models/CreditTransaction.js';
 import { Op } from 'sequelize';
+import { getCreditSettings } from './utils/creditSettings.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -549,6 +552,49 @@ io.on('connection', (socket) => {
           duration: duration,
         });
         console.log(`✅ [SERVER] Call request ${callRequest.id} marked as completed (duration: ${duration}s)`);
+
+        // Apply credit charge for completed call (configured via CRM)
+        try {
+          const settings = await getCreditSettings();
+          const perMinute =
+            callRequest.callType === 'video'
+              ? settings.videoCallPerMinute || 0
+              : settings.voiceCallPerMinute || 0;
+
+          if (perMinute > 0) {
+            // Bill from the very first second: each started minute is charged
+            const billableMinutes = Math.max(1, Math.ceil(duration / 60));
+            const totalCost = perMinute * billableMinutes;
+
+            const caller = await User.findByPk(callRequest.callerId, {
+              attributes: ['id', 'credits'],
+            });
+
+            if (caller) {
+              const currentCredits = caller.credits || 0;
+              if (currentCredits >= totalCost) {
+                await caller.decrement('credits', { by: totalCost });
+                await CreditTransaction.create({
+                  userId: caller.id,
+                  type: 'usage',
+                  amount: -totalCost,
+                  description: `${callRequest.callType === 'video' ? 'Video' : 'Voice'} call (${billableMinutes} min)`,
+                  relatedTo: 'call',
+                  relatedId: callRequest.id,
+                });
+                console.log(
+                  `💳 [SERVER] Deducted ${totalCost} credits from caller ${caller.id} for ${callRequest.callType} call (${billableMinutes} min)`
+                );
+              } else {
+                console.warn(
+                  `⚠️ [SERVER] Caller ${caller.id} has insufficient credits (${currentCredits}) for call cost ${totalCost} – skipping deduction`
+                );
+              }
+            }
+          }
+        } catch (creditError) {
+          console.error('❌ [SERVER] Error applying call credit deduction:', creditError);
+        }
       } else {
         // If no accepted call found, try to find pending call and mark as missed
         const pendingCall = await CallRequest.findOne({

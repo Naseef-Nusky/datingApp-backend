@@ -10,6 +10,7 @@ import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import { uploadToSpaces } from '../utils/spacesUpload.js';
+import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1193,5 +1194,61 @@ router.delete('/wishlist-products/:id', protect, admin, async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
+
+// ============================================
+// Credit Settings (chat, voice, video) - managed via CRM
+// ============================================
+
+// @route   GET /api/admin/credit-settings
+// @desc    Get current credit costs for chat messages and calls
+// @access  Admin
+router.get('/credit-settings', protect, admin, async (req, res) => {
+  try {
+    const settings = await getCreditSettings();
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error fetching credit settings:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/credit-settings
+// @desc    Update credit costs for chat messages and calls
+// @access  Admin
+router.put(
+  '/credit-settings',
+  protect,
+  admin,
+  [
+    body('chatMessage').optional().isInt({ min: 0 }).withMessage('chatMessage must be a non-negative integer'),
+    body('voiceCallPerMinute').optional().isInt({ min: 0 }).withMessage('voiceCallPerMinute must be a non-negative integer'),
+    body('videoCallPerMinute').optional().isInt({ min: 0 }).withMessage('videoCallPerMinute must be a non-negative integer'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const partial = {};
+      if (req.body.chatMessage != null) {
+        partial.chatMessage = parseInt(req.body.chatMessage, 10) || 0;
+      }
+      if (req.body.voiceCallPerMinute != null) {
+        partial.voiceCallPerMinute = parseInt(req.body.voiceCallPerMinute, 10) || 0;
+      }
+      if (req.body.videoCallPerMinute != null) {
+        partial.videoCallPerMinute = parseInt(req.body.videoCallPerMinute, 10) || 0;
+      }
+
+      const settings = await updateCreditSettings(partial);
+      res.json({ settings });
+    } catch (error) {
+      console.error('Error updating credit settings:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
 
 export default router;
