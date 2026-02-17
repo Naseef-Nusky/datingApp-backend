@@ -170,6 +170,61 @@ router.post(
   }
 );
 
+// @route   POST /api/auth/admin-login
+// @desc    Login for CRM admin panel (username + password; username is email or login id)
+// @access  Public
+router.post(
+  '/admin-login',
+  [body('username').trim().notEmpty(), body('password').exists()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { username, password } = req.body;
+      const loginId = String(username).toLowerCase().trim();
+
+      const user = await User.findOne({
+        where: {
+          email: { [Op.iLike]: loginId },
+        },
+      });
+      if (!user) {
+        return res.status(401).json({ message: 'Invalid username or password' });
+      }
+
+      const isMatch = await user.matchPassword(password);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Invalid username or password' });
+      }
+
+      const allowedRoles = ['admin', 'superadmin', 'moderator', 'viewer'];
+      if (!allowedRoles.includes(user.userType)) {
+        return res.status(403).json({ message: 'Admin access required' });
+      }
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      const token = generateToken(user.id);
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+          credits: user.credits,
+        },
+      });
+    } catch (error) {
+      console.error('Admin login error:', error);
+      return res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
@@ -304,6 +359,23 @@ router.post('/password-reset/:token', [body('password').isLength({ min: 6 })], a
   } catch (error) {
     console.error('Password reset error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/auth/location
+// @desc    Detect city/country from request IP (for registration etc.)
+// @access  Public
+router.get('/location', async (req, res) => {
+  try {
+    const clientIP = getClientIP(req);
+    const location = await detectLocation(clientIP);
+    res.json({
+      city: location.city || '',
+      country: location.country || '',
+    });
+  } catch (error) {
+    console.error('Location detection error:', error);
+    res.status(500).json({ city: '', country: '' });
   }
 });
 
