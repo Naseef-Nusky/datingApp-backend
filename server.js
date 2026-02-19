@@ -34,6 +34,7 @@ import userStatusRoutes from './routes/userStatus.js';
 import agoraRoutes from './routes/agora.js';
 import adminRoutes from './routes/admin.js';
 import wishlistRoutes from './routes/wishlist.js';
+import settingsRoutes from './routes/settings.js';
 
 dotenv.config();
 
@@ -107,6 +108,7 @@ app.use('/api/user', userStatusRoutes);
 app.use('/api/agora', agoraRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/wishlist', wishlistRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections

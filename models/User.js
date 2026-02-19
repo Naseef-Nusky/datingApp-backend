@@ -82,6 +82,25 @@ const User = sequelize.define(
       },
       field: 'email_preferences',
     },
+    settings: {
+      type: DataTypes.JSONB,
+      defaultValue: {
+        language: 'en',
+        sound: {
+          myContacts: true,
+          chatRequests: true,
+          repeatUntilRead: false,
+        },
+        phone: null,
+        concierge: {
+          mode: 'all', // 'all', 'week', 'two-weeks', 'month'
+        },
+        manageAccount: {
+          lastChoice: null,
+        },
+      },
+      field: 'settings',
+    },
   },
   {
     tableName: 'users',
