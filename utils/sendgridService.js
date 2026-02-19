@@ -1,4 +1,9 @@
 import sgMail from '@sendgrid/mail';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Initialize SendGrid
 if (process.env.SENDGRID_API_KEY) {
@@ -9,14 +14,62 @@ if (process.env.SENDGRID_API_KEY) {
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating Team';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-const LOGO_URL = `${FRONTEND_URL}/logonew.png`;
+// Logo URL for SendGrid emails (DigitalOcean Spaces); override with SENDGRID_LOGO_URL or PUBLIC_LOGO_URL if needed
+const LOGO_URL = process.env.SENDGRID_LOGO_URL || process.env.PUBLIC_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
+// Lock icon URL for attachment thumbnails in SendGrid emails (DigitalOcean Spaces)
+const LOCK_ICON_URL = 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Icons/lock_icon.png';
+// Video thumbnail image for video attachments in SendGrid emails
+const VIDEO_THUMBNAIL_URL = 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Icons/video_thumbnail.png';
+
+// Embed logo: try multiple paths; use CID attachment so it shows in all email clients
+let LOGO_BASE64 = '';
+const logoPaths = [
+  path.join(__dirname, '..', '..', 'frontend', 'public', 'logonew.png'),
+  path.join(process.cwd(), 'frontend', 'public', 'logonew.png'),
+  path.join(process.cwd(), 'logonew.png'),
+];
+for (const logoPath of logoPaths) {
+  try {
+    if (fs.existsSync(logoPath)) {
+      const logoBuffer = fs.readFileSync(logoPath);
+      LOGO_BASE64 = logoBuffer.toString('base64');
+      break;
+    }
+  } catch (e) {
+    continue;
+  }
+}
+if (!LOGO_BASE64) {
+  console.warn('[SendGrid] Logo file not found at any path, emails will use URL fallback.');
+}
+
+// Lock icon for attachment thumbnails (same as in-app email composer)
+let LOCK_ICON_BASE64 = '';
+const lockIconPaths = [
+  path.join(__dirname, '..', '..', 'frontend', 'public', 'lock_icon.png'),
+  path.join(process.cwd(), 'frontend', 'public', 'lock_icon.png'),
+  path.join(process.cwd(), 'lock_icon.png'),
+];
+for (const p of lockIconPaths) {
+  try {
+    if (fs.existsSync(p)) {
+      LOCK_ICON_BASE64 = fs.readFileSync(p).toString('base64');
+      break;
+    }
+  } catch (e) {
+    continue;
+  }
+}
+if (!LOCK_ICON_BASE64) {
+  console.warn('[SendGrid] Lock icon file not found, attachment thumbnails will use SVG fallback.');
+}
 
 /**
  * Base email template wrapper
  */
 const getBaseTemplate = (content, unsubscribeUrl = null) => {
-  // Logo URL – served from DigitalOcean Spaces (use absolute URL)
-  const logoUrl = LOGO_URL;
+  // Use logo URL (DigitalOcean Spaces) so it loads reliably in email clients
+  const logoSrc = LOGO_URL;
 
   return `
 <!DOCTYPE html>
@@ -147,7 +200,9 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
 <body>
   <div class="container">
     <div class="header">
-      <img src="${logoUrl}" alt="Vantage Dating" class="header-logo" style="max-width: 220px; height: auto; margin: 0 auto 10px auto; display: block; width: auto;" onerror="this.style.display='none';" />
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin: 0 auto;"><tr><td align="center" style="padding: 0 0 10px 0;">
+        <img src="${logoSrc}" alt="Vantage Dating" class="header-logo" width="220" height="auto" style="max-width: 220px; height: auto; display: block; width: auto; border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
+      </td></tr></table>
       <h1 style="margin: 10px 0 0 0; font-size: 18px; font-weight: 400;">Your next date starts here.</h1>
     </div>
     <div class="content">
@@ -201,9 +256,10 @@ export const getMatchNotificationTemplate = (userName, matchData) => {
 
 /**
  * Message Notification Template
- * @param {Object} opts - { attachments, creditCosts: { photoViewCredits, voiceMessageCredits }, senderId }
+ * @param {Object} opts - { attachments, creditCosts, senderId, frontendUrl } - frontendUrl overrides FRONTEND_URL so email links use correct origin/port
  */
 export const getMessageNotificationTemplate = (userName, senderData, messageContent, messageId, mediaUrl = null, opts = {}) => {
+  const baseUrl = (opts.frontendUrl || FRONTEND_URL || '').replace(/\/$/, '') || 'http://localhost:3000';
   const senderName = senderData.profile?.firstName || senderData.email?.split('@')[0] || 'Someone';
   const senderAge = senderData.profile?.age || '';
   const senderBio = senderData.profile?.bio || '';
@@ -212,33 +268,46 @@ export const getMessageNotificationTemplate = (userName, senderData, messageCont
     ? (photos[0]?.url || photos[0] || '') 
     : '';
   const messagePreview = (messageContent || '').replace(/<[^>]*>/g, '').substring(0, 100);
-  const inboxUrl = `${FRONTEND_URL}/inbox`;
-  const profileUrl = opts.senderId ? `${FRONTEND_URL}/profile/${opts.senderId}` : inboxUrl;
-  const isImage = mediaUrl && (mediaUrl.match(/\.(jpg|jpeg|png|gif|webp)$/i) || mediaUrl.includes('image'));
-  const isVideo = mediaUrl && (mediaUrl.match(/\.(mp4|mov|avi|webm)$/i) || mediaUrl.includes('video'));
-  const attachments = Array.isArray(opts.attachments) ? opts.attachments : [];
+  const inboxUrl = `${baseUrl}/inbox`;
+  const inboxUrlWithMessage = messageId ? `${baseUrl}/inbox?messageId=${encodeURIComponent(messageId)}` : inboxUrl;
+  const profileUrl = opts.senderId ? `${baseUrl}/profile/${opts.senderId}` : inboxUrl;
+  // Normalize attachments (may be array or JSON string from DB)
+  let attachments = opts.attachments;
+  if (!Array.isArray(attachments)) {
+    if (typeof attachments === 'string') {
+      try {
+        attachments = JSON.parse(attachments) || [];
+      } catch (_) {
+        attachments = [];
+      }
+    } else {
+      attachments = [];
+    }
+  }
   const photoCost = opts.creditCosts?.photoViewCredits ?? 15;
+  const videoCost = opts.creditCosts?.videoViewCredits ?? opts.creditCosts?.photoViewCredits ?? 15;
   const voiceCost = opts.creditCosts?.voiceMessageCredits ?? 10;
+  const hasPhotos = attachments.some((a) => a.type === 'photo');
+  const hasVideos = attachments.some((a) => a.type === 'video');
+  const hasVoice = attachments.some((a) => a.type === 'voice');
+  const attachmentLabelParts = [hasPhotos && 'photos', hasVideos && 'videos', hasVoice && 'voice messages'].filter(Boolean);
+  const attachmentSectionTitle = attachmentLabelParts.length
+    ? 'Attached ' + attachmentLabelParts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ':'
+    : 'Attachments:';
 
   const content = `
     <div style="margin-bottom: 30px;">
-      <p style="font-size: 28px; font-weight: 400; color: #333; margin: 0 0 5px 0; line-height: 1.2;">
-        ${userName}, you have a
-      </p>
-      <p style="font-size: 28px; font-weight: 700; color: #DC2626; margin: 0 0 5px 0; line-height: 1.2;">
-        new
-      </p>
-      <p style="font-size: 28px; font-weight: 700; color: #DC2626; margin: 0 0 30px 0; line-height: 1.2;">
-        email from:
+      <p style="font-size: 26px; font-weight: 400; color: #333; margin: 0 0 30px 0; line-height: 1.3;">
+        ${userName}, you have a <strong style="color: #DC2626; font-weight: 700;">new</strong> <strong style="color: #DC2626; font-weight: 700;">email</strong> from:
       </p>
     </div>
     
-    <div style="background: white; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin-bottom: 30px;">
+    <div style="background: white; border: 1px solid #E5E7EB; border-radius: 12px; padding: 20px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
       <div style="display: flex; gap: 15px; align-items: flex-start;">
         ${senderImage ? `
-          <img src="${senderImage}" alt="${senderName}" style="width: 100px; height: 100px; border-radius: 8px; object-fit: cover; flex-shrink: 0;" />
+          <img src="${senderImage}" alt="${senderName}" style="width: 100px; height: 100px; border-radius: 12px; object-fit: cover; flex-shrink: 0;" />
         ` : `
-          <div style="width: 100px; height: 100px; border-radius: 8px; background: linear-gradient(135deg, #FF6B35 0%, #FF1493 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 40px; font-weight: bold; flex-shrink: 0;">
+          <div style="width: 100px; height: 100px; border-radius: 12px; background: linear-gradient(135deg, #FF6B35 0%, #FF1493 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 40px; font-weight: bold; flex-shrink: 0;">
             ${senderName.charAt(0).toUpperCase()}
           </div>
         `}
@@ -252,62 +321,51 @@ export const getMessageNotificationTemplate = (userName, senderData, messageCont
             </span>
           </div>
           <p style="font-size: 14px; color: #4B5563; margin: 0 0 8px 0; line-height: 1.5;">
-            ${senderBio ? senderBio.substring(0, 80) + (senderBio.length > 80 ? '...' : '') : messagePreview + (messageContent.length > 100 ? '...' : '')}
+            ${senderBio ? senderBio.substring(0, 80) + (senderBio.length > 80 ? '...' : '') : messagePreview + ((messageContent || '').replace(/<[^>]*>/g, '').length > 100 ? '...' : '')}
           </p>
-          <a href="${inboxUrl}" style="color: #2563EB; text-decoration: none; font-size: 14px; font-weight: 500;">
+          <a href="${inboxUrl}" style="color: #2563EB; text-decoration: underline; font-size: 14px; font-weight: 500;">
             Read more
           </a>
-          ${opts.senderId ? `<br/><a href="${profileUrl}" style="color: #2563EB; text-decoration: none; font-size: 14px; font-weight: 500;">Open profile</a>` : ''}
+          ${opts.senderId ? `<br/><a href="${profileUrl}" style="color: #2563EB; text-decoration: underline; font-size: 14px; font-weight: 500;">Open profile</a>` : ''}
         </div>
       </div>
     </div>
     
-    ${mediaUrl ? `
-    <div style="margin: 20px 0; text-align: center;">
-      ${isImage ? `
-        <img src="${mediaUrl}" alt="Attachment" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
-      ` : isVideo ? `
-        <video src="${mediaUrl}" controls style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-          Your browser does not support the video tag.
-        </video>
-      ` : `
-        <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; border: 2px dashed #FF6B35;">
-          <p style="margin: 0; color: #666;">📎 Attachment included</p>
-          <a href="${mediaUrl}" style="color: #FF6B35; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 10px;">Download Attachment</a>
-        </div>
-      `}
-    </div>
-    ` : ''}
-    
     ${attachments.length > 0 ? `
-    <p style="font-size: 16px; font-weight: 600; color: #333; margin: 24px 0 12px 0;">Attached photos and voice messages:</p>
-    <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
-      ${attachments.map((a) => a.type === 'photo' ? `
-        <div style="width: 72px; height: 72px; border-radius: 6px; overflow: hidden; position: relative;">
-          <div style="position: absolute; inset: -8px; background-image: url('${(a.url || '').replace(/'/g, '%27')}'); background-size: cover; background-position: center; filter: blur(14px);"></div>
-          <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-          </div>
-        </div>
-      ` : `
-        <div style="width: 72px; height: 72px; border-radius: 6px; background: #E0F2FE; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
-          <span style="font-size: 20px; color: #0EA5E9;">▶</span>
-          <span style="position: absolute; bottom: 4px; right: 4px; font-size: 10px; color: #64748B;">🔒</span>
-        </div>
-      `).join('')}
+    <div style="margin-bottom: 16px;">
+    <p style="font-size: 16px; font-weight: 600; color: #333; margin: 0 0 12px 0;">${attachmentSectionTitle}</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 0;"><tr>
+      ${attachments.map((a) => {
+        const isPhoto = a.type === 'photo' && a.url;
+        const isVideo = a.type === 'video';
+        const isVoice = a.type === 'voice';
+        const videoThumbUrl = isVideo && (a.thumbnailUrl || a.thumbnail_url || a.posterUrl);
+        const videoBgUrl = isVideo ? (videoThumbUrl || VIDEO_THUMBNAIL_URL) : '';
+        const hasImageBg = (isPhoto && a.url) || (isVideo && videoBgUrl);
+        const imageUrl = isPhoto ? (a.url || '') : videoBgUrl;
+        const safeImageUrl = (imageUrl || '').replace(/'/g, '%27');
+        const bgColor = isPhoto ? '#ffffff' : (isVideo ? '#e5e7eb' : '#e5e7eb');
+        const bgStyle = hasImageBg && safeImageUrl
+          ? `background-image: linear-gradient(rgba(255,255,255,0.7), rgba(255,255,255,0.7)), url('${safeImageUrl}'); background-size: cover; background-position: center; background-color: ${bgColor}; filter: blur(6px); -webkit-filter: blur(6px);`
+          : `background-color: ${bgColor};`;
+        const playIcon = isVoice ? '<span style="font-size: 20px; color: #6b7280; line-height: 1;">&#9654;</span>' : '';
+        return `<td style="padding: 4px; vertical-align: top;"><a href="${inboxUrlWithMessage}" style="text-decoration: none; display: block;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 72px; height: 72px; border: 1px solid #D1D5DB; border-radius: 8px; ${bgStyle}"><tr><td align="center" style="vertical-align: middle; padding: 0;">${playIcon}<img src="${LOCK_ICON_URL}" width="28" height="28" alt="" style="display: block; border: 0; margin: 4px auto 0 auto;" /></td></tr></table></a></td>`;
+      }).join('')}
+    </tr></table>
     </div>
-    <p style="font-size: 13px; color: #6B7280; margin: 0 0 8px 0;">Viewing photo is billed at ${photoCost} Credits</p>
-    <p style="font-size: 13px; color: #6B7280; margin: 0 0 16px 0;">Listening voice messages is billed at ${voiceCost} Credits</p>
+    ${hasPhotos ? `<p style="font-size: 13px; color: #6B7280; margin: 0 0 4px 0;">Viewing photo is billed at ${photoCost} Credits</p>` : ''}
+    ${hasVideos ? `<p style="font-size: 13px; color: #6B7280; margin: 0 0 4px 0;">Viewing video is billed at ${videoCost} Credits</p>` : ''}
+    ${hasVoice ? `<p style="font-size: 13px; color: #6B7280; margin: 0 0 16px 0;">Listening voice messages is billed at ${voiceCost} Credits</p>` : ''}
     ` : ''}
     
     <div style="text-align: center; margin: 30px 0;">
-      <a href="${inboxUrl}" style="display: inline-block; background: #DC2626; color: white !important; padding: 14px 40px; text-decoration: none; border-radius: 6px; font-weight: 700; font-size: 16px; box-shadow: 0 4px 6px rgba(220, 38, 38, 0.2);">
-        Read this email
+      <a href="${inboxUrlWithMessage}" style="display: inline-block; background: #DC2626; color: white !important; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 16px; box-shadow: 0 4px 6px rgba(220, 38, 38, 0.2);">
+        Read for FREE
       </a>
     </div>
   `;
 
-  return getBaseTemplate(content, `${FRONTEND_URL}/settings/email-preferences`);
+  return getBaseTemplate(content, `${baseUrl}/settings/email-preferences`);
 };
 
 /**
@@ -420,7 +478,7 @@ export const getOnlineNotificationTemplate = (onlineUserData) => {
 <body>
   <div class="container">
     <div class="header">
-      <img src="${LOGO_URL}" alt="Dating" class="header-logo" onerror="this.style.display='none';" />
+      <img src="${LOGO_URL}" alt="Vantage Dating" class="header-logo" width="180" height="auto" style="max-width: 180px; height: auto; display: block; border: 0;" />
     </div>
     <h1 class="main-heading">${name} is now online!</h1>
     <div class="profile-card">

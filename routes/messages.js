@@ -1633,14 +1633,15 @@ router.get('/emails/:emailId', protect, async (req, res) => {
 // @access  Private
 router.post('/send-email', protect, upload.single('media'), async (req, res) => {
   try {
-    const { receiverId, subject, content, mediaUrl, attachments: attachmentsRaw } = req.body;
+    const { receiverId, subject, content, mediaUrl, attachments: attachmentsRaw, frontendUrl: bodyFrontendUrl } = req.body;
+    const frontendUrl = bodyFrontendUrl || req.get('Origin') || process.env.FRONTEND_URL;
     let uploadedMediaUrl = mediaUrl || null;
     let attachments = null;
     if (attachmentsRaw) {
       try {
         const parsed = typeof attachmentsRaw === 'string' ? JSON.parse(attachmentsRaw) : attachmentsRaw;
         if (Array.isArray(parsed) && parsed.length) {
-          attachments = parsed.filter((a) => a && (a.type === 'photo' || a.type === 'voice') && a.url);
+          attachments = parsed.filter((a) => a && (a.type === 'photo' || a.type === 'voice' || a.type === 'video') && a.url);
         }
       } catch (_) {}
     }
@@ -1789,12 +1790,14 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
         message.id,
         uploadedMediaUrl,
         {
-          attachments: message.attachments || undefined,
+          attachments: Array.isArray(message.attachments) && message.attachments.length > 0 ? message.attachments : (attachments || undefined),
           creditCosts: {
             photoViewCredits: creditCosts.photoViewCredits,
+            videoViewCredits: creditCosts.videoViewCredits ?? creditCosts.photoViewCredits,
             voiceMessageCredits: creditCosts.voiceMessageCredits,
           },
           senderId: sender.id,
+          frontendUrl,
         }
       );
 
@@ -1945,7 +1948,11 @@ router.post('/emails/:emailId/unlock-attachment', protect, async (req, res) => {
     }
 
     const creditSettings = await getCreditSettings();
-    const cost = attachment.type === 'voice' ? (creditSettings.voiceMessageCredits ?? 10) : (creditSettings.photoViewCredits ?? 15);
+    const cost = attachment.type === 'voice'
+      ? (creditSettings.voiceMessageCredits ?? 10)
+      : attachment.type === 'video'
+        ? (creditSettings.videoViewCredits ?? creditSettings.photoViewCredits ?? 15)
+        : (creditSettings.photoViewCredits ?? 15);
     if (cost <= 0) {
       return res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: false });
     }

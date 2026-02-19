@@ -12,6 +12,8 @@ export const DEFAULT_CREDIT_SETTINGS = {
   videoCallPerMinute: 0,
   // Cost to view one photo attachment in email (unlock)
   photoViewCredits: 15,
+  // Cost to view one video attachment in email (unlock)
+  videoViewCredits: 15,
   // Cost to listen to one voice message attachment in email (unlock)
   voiceMessageCredits: 10,
 };
