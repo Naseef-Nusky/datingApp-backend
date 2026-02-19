@@ -10,6 +10,10 @@ export const DEFAULT_CREDIT_SETTINGS = {
   voiceCallPerMinute: 0,
   // Cost per started minute of video call in credits
   videoCallPerMinute: 0,
+  // Cost to view one photo attachment in email (unlock)
+  photoViewCredits: 15,
+  // Cost to listen to one voice message attachment in email (unlock)
+  voiceMessageCredits: 10,
 };
 
 export const getCreditSettings = async () => {

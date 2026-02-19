@@ -82,6 +82,13 @@ const Message = sequelize.define(
       defaultValue: 0,
       field: 'credits_used',
     },
+    // For email messages: array of { type: 'photo'|'voice', url: string } (locked until user pays credits)
+    attachments: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      defaultValue: null,
+      field: 'attachments',
+    },
   },
   {
     tableName: 'messages',

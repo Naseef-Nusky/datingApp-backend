@@ -1223,6 +1223,8 @@ router.put(
     body('chatMessage').optional().isInt({ min: 0 }).withMessage('chatMessage must be a non-negative integer'),
     body('voiceCallPerMinute').optional().isInt({ min: 0 }).withMessage('voiceCallPerMinute must be a non-negative integer'),
     body('videoCallPerMinute').optional().isInt({ min: 0 }).withMessage('videoCallPerMinute must be a non-negative integer'),
+    body('photoViewCredits').optional().isInt({ min: 0 }).withMessage('photoViewCredits must be a non-negative integer'),
+    body('voiceMessageCredits').optional().isInt({ min: 0 }).withMessage('voiceMessageCredits must be a non-negative integer'),
   ],
   async (req, res) => {
     try {
@@ -1240,6 +1242,12 @@ router.put(
       }
       if (req.body.videoCallPerMinute != null) {
         partial.videoCallPerMinute = parseInt(req.body.videoCallPerMinute, 10) || 0;
+      }
+      if (req.body.photoViewCredits != null) {
+        partial.photoViewCredits = parseInt(req.body.photoViewCredits, 10) || 0;
+      }
+      if (req.body.voiceMessageCredits != null) {
+        partial.voiceMessageCredits = parseInt(req.body.voiceMessageCredits, 10) || 0;
       }
 
       const settings = await updateCreditSettings(partial);

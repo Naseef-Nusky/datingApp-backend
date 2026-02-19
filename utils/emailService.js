@@ -81,7 +81,7 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
     <body>
       <div class="container">
         <div class="header">
-          <img src="https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/Logo.jpeg" alt="Vantage Dating" style="max-width: 200px; height: auto; margin-bottom: 10px;" />
+          <img src="${(process.env.FRONTEND_URL || 'http://localhost:3000')}/logonew.png" alt="Vantage Dating" style="max-width: 200px; height: auto; margin-bottom: 10px;" />
           <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Your next date starts here.</p>
           <h1 style="margin-top: 15px;">${messageType === 'email' ? '📧 New Email' : '💬 New Message'}</h1>
         </div>

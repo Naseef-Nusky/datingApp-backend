@@ -12,9 +12,12 @@ import './models/index.js';
 import CallRequest from './models/CallRequest.js';
 import Notification from './models/Notification.js';
 import User from './models/User.js';
+import Profile from './models/Profile.js';
+import Chat from './models/Chat.js';
 import CreditTransaction from './models/CreditTransaction.js';
 import { Op } from 'sequelize';
 import { getCreditSettings } from './utils/creditSettings.js';
+import { sendOnlineNotification } from './utils/sendgridService.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -120,7 +123,36 @@ io.on('connection', (socket) => {
     // Store userId with socket
     socketUserMap.set(socket.id, userIdStr);
     console.log(`📢 [SERVER] User ${userIdStr} joined room: ${roomName} (socket: ${socket.id})`);
-    
+
+    // Mark user online and send "X is now online!" emails to their contacts
+    (async () => {
+      try {
+        await Profile.update({ isOnline: true }, { where: { userId: userIdStr } });
+        const chats = await Chat.findAll({
+          where: { [Op.or]: [{ user1Id: userIdStr }, { user2Id: userIdStr }] },
+          attributes: ['user1Id', 'user2Id'],
+        });
+        const contactIds = [...new Set(chats.map((c) => (c.user1Id === userIdStr ? c.user2Id : c.user1Id)))];
+        if (contactIds.length === 0) return;
+        const onlineUser = await User.findByPk(userIdStr, {
+          include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos', 'profileImage'] }],
+          attributes: ['id', 'email'],
+        });
+        if (!onlineUser?.email) return;
+        const onlineUserData = { id: onlineUser.id, email: onlineUser.email, profile: onlineUser.profile || {} };
+        for (const contactId of contactIds) {
+          const contact = await User.findByPk(contactId, { attributes: ['id', 'email'] });
+          if (contact?.email) {
+            sendOnlineNotification(contact.email, onlineUserData).catch((err) =>
+              console.error('Online notification email error:', err.message)
+            );
+          }
+        }
+      } catch (err) {
+        console.error('Join-room online notification error:', err.message);
+      }
+    })();
+
     // Debug: Check room size
     io.in(roomName).fetchSockets().then(sockets => {
       console.log(`🔍 [SERVER] Room ${roomName} now has ${sockets.length} socket(s)`);

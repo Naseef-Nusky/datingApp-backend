@@ -9,7 +9,7 @@ if (process.env.SENDGRID_API_KEY) {
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating Team';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-const LOGO_URL = 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/Logo.jpeg';
+const LOGO_URL = `${FRONTEND_URL}/logonew.png`;
 
 /**
  * Base email template wrapper
@@ -201,21 +201,24 @@ export const getMatchNotificationTemplate = (userName, matchData) => {
 
 /**
  * Message Notification Template
+ * @param {Object} opts - { attachments, creditCosts: { photoViewCredits, voiceMessageCredits }, senderId }
  */
-export const getMessageNotificationTemplate = (userName, senderData, messageContent, messageId, mediaUrl = null) => {
+export const getMessageNotificationTemplate = (userName, senderData, messageContent, messageId, mediaUrl = null, opts = {}) => {
   const senderName = senderData.profile?.firstName || senderData.email?.split('@')[0] || 'Someone';
   const senderAge = senderData.profile?.age || '';
   const senderBio = senderData.profile?.bio || '';
-  // Get first photo from photos array
   const photos = senderData.profile?.photos;
   const senderImage = (photos && Array.isArray(photos) && photos.length > 0) 
     ? (photos[0]?.url || photos[0] || '') 
     : '';
-  const messagePreview = messageContent.replace(/<[^>]*>/g, '').substring(0, 100);
-  // Use absolute URLs for links
+  const messagePreview = (messageContent || '').replace(/<[^>]*>/g, '').substring(0, 100);
   const inboxUrl = `${FRONTEND_URL}/inbox`;
+  const profileUrl = opts.senderId ? `${FRONTEND_URL}/profile/${opts.senderId}` : inboxUrl;
   const isImage = mediaUrl && (mediaUrl.match(/\.(jpg|jpeg|png|gif|webp)$/i) || mediaUrl.includes('image'));
   const isVideo = mediaUrl && (mediaUrl.match(/\.(mp4|mov|avi|webm)$/i) || mediaUrl.includes('video'));
+  const attachments = Array.isArray(opts.attachments) ? opts.attachments : [];
+  const photoCost = opts.creditCosts?.photoViewCredits ?? 15;
+  const voiceCost = opts.creditCosts?.voiceMessageCredits ?? 10;
 
   const content = `
     <div style="margin-bottom: 30px;">
@@ -254,6 +257,7 @@ export const getMessageNotificationTemplate = (userName, senderData, messageCont
           <a href="${inboxUrl}" style="color: #2563EB; text-decoration: none; font-size: 14px; font-weight: 500;">
             Read more
           </a>
+          ${opts.senderId ? `<br/><a href="${profileUrl}" style="color: #2563EB; text-decoration: none; font-size: 14px; font-weight: 500;">Open profile</a>` : ''}
         </div>
       </div>
     </div>
@@ -273,6 +277,27 @@ export const getMessageNotificationTemplate = (userName, senderData, messageCont
         </div>
       `}
     </div>
+    ` : ''}
+    
+    ${attachments.length > 0 ? `
+    <p style="font-size: 16px; font-weight: 600; color: #333; margin: 24px 0 12px 0;">Attached photos and voice messages:</p>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+      ${attachments.map((a) => a.type === 'photo' ? `
+        <div style="width: 72px; height: 72px; border-radius: 6px; overflow: hidden; position: relative;">
+          <div style="position: absolute; inset: -8px; background-image: url('${(a.url || '').replace(/'/g, '%27')}'); background-size: cover; background-position: center; filter: blur(14px);"></div>
+          <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </div>
+        </div>
+      ` : `
+        <div style="width: 72px; height: 72px; border-radius: 6px; background: #E0F2FE; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;">
+          <span style="font-size: 20px; color: #0EA5E9;">▶</span>
+          <span style="position: absolute; bottom: 4px; right: 4px; font-size: 10px; color: #64748B;">🔒</span>
+        </div>
+      `).join('')}
+    </div>
+    <p style="font-size: 13px; color: #6B7280; margin: 0 0 8px 0;">Viewing photo is billed at ${photoCost} Credits</p>
+    <p style="font-size: 13px; color: #6B7280; margin: 0 0 16px 0;">Listening voice messages is billed at ${voiceCost} Credits</p>
     ` : ''}
     
     <div style="text-align: center; margin: 30px 0;">
@@ -352,6 +377,103 @@ export const getDailyDigestTemplate = (userName, stats) => {
   `;
 
   return getBaseTemplate(content, `${FRONTEND_URL}/settings/email-preferences`);
+};
+
+/**
+ * "X is now online!" notification email (like dating.com – profile card, Chat Now, virtual gifts banner)
+ */
+export const getOnlineNotificationTemplate = (onlineUserData) => {
+  const name = onlineUserData.profile?.firstName
+    ? `${onlineUserData.profile.firstName}${onlineUserData.profile.lastName ? ' ' + onlineUserData.profile.lastName : ''}`
+    : onlineUserData.email?.split('@')[0] || 'Someone';
+  const photos = onlineUserData.profile?.photos;
+  const profileImage = (photos && Array.isArray(photos) && photos.length > 0)
+    ? (photos[0]?.url || photos[0] || '')
+    : onlineUserData.profile?.profileImage || '';
+  const chatUrl = `${FRONTEND_URL}/inbox`;
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background: #fff; }
+    .container { max-width: 600px; margin: 0 auto; background: white; }
+    .header { padding: 24px 20px 16px; text-align: left; border-bottom: 3px solid #DC2626; }
+    .header-logo { max-width: 180px; height: auto; display: block; }
+    .main-heading { font-size: 26px; font-weight: 700; color: #111; margin: 24px 20px 20px; line-height: 1.3; }
+    .profile-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 0 20px 24px; display: flex; gap: 20px; align-items: center; }
+    .profile-img { width: 120px; height: 140px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+    .profile-placeholder { width: 120px; height: 140px; border-radius: 8px; background: linear-gradient(135deg, #FF6B35 0%, #FF1493 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 48px; font-weight: bold; flex-shrink: 0; }
+    .profile-name { font-size: 18px; font-weight: 600; color: #2563EB; margin: 0 0 4px 0; }
+    .profile-status { font-size: 14px; color: #4B5563; margin: 0 0 16px 0; }
+    .btn-chat { display: inline-block; background: #DC2626; color: white !important; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px; }
+    .banner { background: #DC2626; border-radius: 12px; margin: 0 20px 24px; padding: 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+    .banner-text { color: white; font-size: 22px; font-weight: 700; margin: 0 0 12px 0; }
+    .btn-gifts { display: inline-block; background: white; color: #111 !important; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; }
+    .footer { text-align: center; padding: 20px; color: #6B7280; font-size: 13px; }
+    .footer strong { color: #374151; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${LOGO_URL}" alt="Dating" class="header-logo" onerror="this.style.display='none';" />
+    </div>
+    <h1 class="main-heading">${name} is now online!</h1>
+    <div class="profile-card">
+      ${profileImage
+        ? `<img src="${profileImage}" alt="${name}" class="profile-img" />`
+        : `<div class="profile-placeholder">${name.charAt(0).toUpperCase()}</div>`}
+      <div>
+        <p class="profile-name">${name}</p>
+        <p class="profile-status">recently went online</p>
+        <a href="${chatUrl}" class="btn-chat">Chat Now</a>
+      </div>
+    </div>
+    <div class="banner">
+      <div>
+        <p class="banner-text">Show your devotion...</p>
+        <a href="${chatUrl}" class="btn-gifts">Send virtual gifts</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p style="margin: 0;">Meet awesome people</p>
+      <p style="margin: 4px 0 0 0;"><strong>on Dating.com</strong></p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+};
+
+/**
+ * Send "X is now online" email to a recipient (contact of the user who came online)
+ */
+export const sendOnlineNotification = async (recipientEmail, onlineUserData) => {
+  const name = onlineUserData.profile?.firstName
+    ? `${onlineUserData.profile.firstName}${onlineUserData.profile.lastName ? ' ' + onlineUserData.profile.lastName : ''}`
+    : onlineUserData.email?.split('@')[0] || 'Someone';
+  const subject = `${name} is now online!`;
+  const htmlContent = getOnlineNotificationTemplate(onlineUserData);
+  const result = await sendEmail(
+    recipientEmail,
+    subject,
+    htmlContent,
+    null,
+    { notificationType: 'user_online', onlineUserId: onlineUserData.id }
+  );
+  if (!result.success && (result.error || '').toLowerCase().includes('not configured')) {
+    try {
+      const { sendEmail: sendEmailSmtp } = await import('./emailService.js');
+      return await sendEmailSmtp(recipientEmail, subject, htmlContent);
+    } catch (e) {
+      return result;
+    }
+  }
+  return result;
 };
 
 /**
@@ -528,27 +650,15 @@ export const sendMatchNotification = async (user, matchData) => {
 
 /**
  * Send message notification email
+ * @param {Object} opts - optional { attachments, creditCosts: { photoViewCredits, voiceMessageCredits }, senderId }
  */
-export const sendMessageNotification = async (user, senderData, messageContent, messageId, mediaUrl = null) => {
-  console.log('📧 [sendMessageNotification] Starting...');
-  console.log('📧 [sendMessageNotification] User email:', user.email);
-  console.log('📧 [sendMessageNotification] User ID:', user.id);
-  console.log('📧 [sendMessageNotification] Sender data:', senderData.email);
-  
+export const sendMessageNotification = async (user, senderData, messageContent, messageId, mediaUrl = null, opts = {}) => {
   if (!user || !user.email) {
-    console.error('❌ [sendMessageNotification] User or user.email is missing');
     return { success: false, error: 'User email is required' };
   }
-  
   const userName = user.profile?.firstName || user.email?.split('@')[0] || 'User';
   const senderName = senderData.profile?.firstName || senderData.email?.split('@')[0] || 'Someone';
-  
-  console.log('📧 [sendMessageNotification] User name:', userName);
-  console.log('📧 [sendMessageNotification] Sender name:', senderName);
-  console.log('📧 [sendMessageNotification] Message content length:', messageContent?.length || 0);
-  console.log('📧 [sendMessageNotification] Has media:', !!mediaUrl);
-  
-  const htmlContent = getMessageNotificationTemplate(userName, senderData, messageContent, messageId, mediaUrl);
+  const htmlContent = getMessageNotificationTemplate(userName, senderData, messageContent, messageId, mediaUrl, opts);
   const subject = `New message from ${senderName}`;
   
   console.log('📧 [sendMessageNotification] Calling sendEmail...');
@@ -604,4 +714,5 @@ export default {
   sendMessageNotification,
   sendProfileViewNotification,
   sendDailyDigest,
+  sendOnlineNotification,
 };

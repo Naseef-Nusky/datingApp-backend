@@ -13,8 +13,8 @@ import Block from '../models/Block.js';
 import { protect } from '../middleware/auth.js';
 import multer from 'multer';
 import { uploadToSpaces } from '../utils/spacesUpload.js';
-import { sendEmail, sendEmailNotification } from '../utils/emailService.js';
-import { sendMessageNotification } from '../utils/sendgridService.js';
+import { sendEmail as sendSmtpEmail } from '../utils/emailService.js';
+import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings } from '../utils/creditSettings.js';
 
@@ -1578,6 +1578,26 @@ router.get('/emails/:emailId', protect, async (req, res) => {
       return res.status(404).json({ message: 'Email not found' });
     }
 
+    // For receiver: mask attachment URLs until unlocked (return locked/unlocked per index)
+    if (email.receiver === req.user.id && Array.isArray(email.attachments) && email.attachments.length) {
+      const masked = [];
+      for (let i = 0; i < email.attachments.length; i++) {
+        const a = email.attachments[i];
+        const desc = `email_attachment:${email.id}:${i}`;
+        const unlocked = await CreditTransaction.findOne({
+          where: { userId: req.user.id, relatedTo: 'other', description: desc },
+        });
+        // For locked photos, send url so frontend can show blurred preview; for voice keep null until unlocked
+        masked.push({
+          type: a.type,
+          url: unlocked ? a.url : (a.type === 'photo' ? a.url : null),
+          locked: !unlocked,
+          index: i,
+        });
+      }
+      email.setDataValue('attachments', masked);
+    }
+
     // Mark as read if current user is receiver
     if (email.receiver === req.user.id && !email.isRead) {
       await email.update({
@@ -1598,7 +1618,10 @@ router.get('/emails/:emailId', protect, async (req, res) => {
       }
     }
 
-    res.json(email);
+    const creditCosts = await getCreditSettings();
+    const payload = email.toJSON ? email.toJSON() : { ...(email.get ? email.get({ plain: true }) : email) };
+    payload.creditCosts = { photoViewCredits: creditCosts.photoViewCredits, voiceMessageCredits: creditCosts.voiceMessageCredits };
+    res.json(payload);
   } catch (error) {
     console.error('Get email error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -1610,8 +1633,17 @@ router.get('/emails/:emailId', protect, async (req, res) => {
 // @access  Private
 router.post('/send-email', protect, upload.single('media'), async (req, res) => {
   try {
-    const { receiverId, subject, content, mediaUrl } = req.body;
+    const { receiverId, subject, content, mediaUrl, attachments: attachmentsRaw } = req.body;
     let uploadedMediaUrl = mediaUrl || null;
+    let attachments = null;
+    if (attachmentsRaw) {
+      try {
+        const parsed = typeof attachmentsRaw === 'string' ? JSON.parse(attachmentsRaw) : attachmentsRaw;
+        if (Array.isArray(parsed) && parsed.length) {
+          attachments = parsed.filter((a) => a && (a.type === 'photo' || a.type === 'voice') && a.url);
+        }
+      } catch (_) {}
+    }
     
     // Handle file upload if present
     if (req.file) {
@@ -1713,13 +1745,14 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
 
     // Create internal message record WITH chat_id (REQUIRED - fixes NOT NULL constraint)
     const messageData = {
-      chatId: chat.id, // ✅ REQUIRED - every message must belong to a chat thread
+      chatId: chat.id,
       sender: req.user.id,
       receiver: receiverId,
       content: content,
       mediaUrl: uploadedMediaUrl || null,
-      messageType: 'email', // Email is just a message type, still needs chat_id
+      messageType: 'email',
       creditsUsed: 0,
+      attachments: attachments || null,
     };
 
     let message;
@@ -1745,23 +1778,42 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       
       let emailResult;
       
-      // Try SendGrid first (if configured), then fallback to SMTP
+      // Build common HTML content (same template for SendGrid + SMTP)
+      const creditCosts = await getCreditSettings();
+      const userNameForTemplate =
+        receiver.profile?.firstName || receiver.email?.split('@')[0] || 'User';
+      const htmlContent = getMessageNotificationTemplate(
+        userNameForTemplate,
+        sender,
+        content || '',
+        message.id,
+        uploadedMediaUrl,
+        {
+          attachments: message.attachments || undefined,
+          creditCosts: {
+            photoViewCredits: creditCosts.photoViewCredits,
+            voiceMessageCredits: creditCosts.voiceMessageCredits,
+          },
+          senderId: sender.id,
+        }
+      );
+
       if (process.env.SENDGRID_API_KEY) {
         console.log('📧 [SEND EMAIL] Using SendGrid (IMMEDIATE SEND)...');
-        console.log('📧 [SEND EMAIL] FROM_EMAIL:', process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER);
-        console.log('📧 [SEND EMAIL] Media URL:', uploadedMediaUrl || 'None');
-        
-        // Send email IMMEDIATELY - no delays, no queues
-        emailResult = await sendMessageNotification(receiver, sender, content, message.id, uploadedMediaUrl);
-        
-        const emailDuration = Date.now() - emailStartTime;
-        console.log('📧 [SEND EMAIL] Email send completed in', emailDuration, 'ms');
+        emailResult = await sendGridEmail(
+          receiver.email,
+          emailSubject,
+          htmlContent,
+          null,
+          { notificationType: 'new_message', userId: receiver.id, messageId: message.id }
+        );
       } else {
         console.log('📧 [SEND EMAIL] Using SMTP (nodemailer) (IMMEDIATE SEND)...');
-        emailResult = await sendEmailNotification(receiver, sender, content, 'email', uploadedMediaUrl);
-        
-        const emailDuration = Date.now() - emailStartTime;
-        console.log('📧 [SEND EMAIL] Email send completed in', emailDuration, 'ms');
+        emailResult = await sendSmtpEmail(
+          receiver.email,
+          emailSubject,
+          htmlContent
+        );
       }
       
       if (emailResult && emailResult.success) {
@@ -1848,6 +1900,81 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       error: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
+  }
+});
+
+// @route   POST /api/messages/emails/:emailId/unlock-attachment
+// @desc    Unlock one email attachment (photo or voice); deduct credits and return URL
+// @access  Private
+router.post('/emails/:emailId/unlock-attachment', protect, async (req, res) => {
+  try {
+    const { emailId } = req.params;
+    const { index } = req.body;
+    const idx = parseInt(index, 10);
+    if (Number.isNaN(idx) || idx < 0) {
+      return res.status(400).json({ message: 'Invalid attachment index' });
+    }
+
+    const email = await Message.findOne({
+      where: {
+        id: emailId,
+        messageType: 'email',
+        receiver: req.user.id,
+      },
+    });
+    if (!email) {
+      return res.status(404).json({ message: 'Email not found' });
+    }
+
+    const attachments = Array.isArray(email.attachments) ? email.attachments : [];
+    const attachment = attachments[idx];
+    if (!attachment || !attachment.url) {
+      return res.status(404).json({ message: 'Attachment not found' });
+    }
+
+    const desc = `email_attachment:${emailId}:${idx}`;
+    const existing = await CreditTransaction.findOne({
+      where: {
+        userId: req.user.id,
+        relatedTo: 'other',
+        description: desc,
+      },
+    });
+    if (existing) {
+      return res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: true });
+    }
+
+    const creditSettings = await getCreditSettings();
+    const cost = attachment.type === 'voice' ? (creditSettings.voiceMessageCredits ?? 10) : (creditSettings.photoViewCredits ?? 15);
+    if (cost <= 0) {
+      return res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: false });
+    }
+
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'credits'] });
+    if (!user) return res.status(401).json({ message: 'User not found' });
+    const balance = user.credits ?? 0;
+    if (balance < cost) {
+      return res.status(400).json({
+        message: 'Insufficient credits',
+        required: cost,
+        balance,
+      });
+    }
+
+    await user.decrement('credits', { by: cost });
+    await CreditTransaction.create({
+      userId: req.user.id,
+      type: 'usage',
+      amount: -cost,
+      description: desc,
+      relatedTo: 'other',
+      relatedId: email.id,
+    });
+
+    res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: false, creditsUsed: cost });
+  } catch (error) {
+    console.error('Unlock attachment error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
