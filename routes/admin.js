@@ -266,19 +266,18 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
 // ============================================
 
 // @route   GET /api/admin/users
-// @desc    Get all regular users
+// @desc    Get all regular users. filter: all|active|inactive|verified|unverified|neverSpent|noSpend7d|noSpend30d
 // @access  Superadmin or Viewer
 router.get('/users', protect, admin, async (req, res) => {
   try {
     const { filter } = req.query;
 
-    let whereClause = {
+    const whereClause = {
       userType: {
-        [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'], // Exclude admin users
+        [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
       },
     };
 
-    // Apply filters
     if (filter === 'active') {
       whereClause.isActive = true;
     } else if (filter === 'inactive') {
@@ -287,6 +286,25 @@ router.get('/users', protect, admin, async (req, res) => {
       whereClause.isVerified = true;
     } else if (filter === 'unverified') {
       whereClause.isVerified = false;
+    } else if (filter === 'neverSpent') {
+      whereClause[Op.or] = [
+        { totalCreditsSpent: 0 },
+        { totalCreditsSpent: null },
+      ];
+    } else if (filter === 'noSpend7d') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      whereClause[Op.or] = [
+        { lastCreditSpentAt: null },
+        { lastCreditSpentAt: { [Op.lt]: sevenDaysAgo } },
+      ];
+    } else if (filter === 'noSpend30d') {
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      whereClause[Op.or] = [
+        { lastCreditSpentAt: null },
+        { lastCreditSpentAt: { [Op.lt]: thirtyDaysAgo } },
+      ];
     }
 
     const users = await User.findAll({
@@ -298,7 +316,10 @@ router.get('/users', protect, admin, async (req, res) => {
           attributes: ['firstName', 'lastName', 'age', 'gender', 'photos'],
         },
       ],
-      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits'],
+      attributes: [
+        'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
+        'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
+      ],
       order: [['createdAt', 'DESC']],
     });
 
@@ -1226,6 +1247,7 @@ router.put(
     body('photoViewCredits').optional().isInt({ min: 0 }).withMessage('photoViewCredits must be a non-negative integer'),
     body('videoViewCredits').optional().isInt({ min: 0 }).withMessage('videoViewCredits must be a non-negative integer'),
     body('voiceMessageCredits').optional().isInt({ min: 0 }).withMessage('voiceMessageCredits must be a non-negative integer'),
+    body('vipCreditsRequired').optional().isInt({ min: 1 }).withMessage('vipCreditsRequired must be a positive integer'),
   ],
   async (req, res) => {
     try {
@@ -1252,6 +1274,9 @@ router.put(
       }
       if (req.body.voiceMessageCredits != null) {
         partial.voiceMessageCredits = parseInt(req.body.voiceMessageCredits, 10) || 0;
+      }
+      if (req.body.vipCreditsRequired != null) {
+        partial.vipCreditsRequired = Math.max(1, parseInt(req.body.vipCreditsRequired, 10) || 160);
       }
 
       const settings = await updateCreditSettings(partial);

@@ -65,6 +65,26 @@ const User = sequelize.define(
       type: DataTypes.DATE,
       allowNull: true,
     },
+    totalCreditsSpent: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      field: 'total_credits_spent',
+    },
+    lastCreditSpentAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'last_credit_spent_at',
+    },
+    vipActive: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'vip_active',
+    },
+    vipExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'vip_expires_at',
+    },
     monthlyCreditRefill: {
       type: DataTypes.INTEGER,
       defaultValue: 0,

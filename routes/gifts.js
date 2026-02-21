@@ -2,6 +2,7 @@ import express from 'express';
 import { Op } from 'sequelize';
 import { User, GiftCatalog, Gift, CreditTransaction, Notification, Chat, Message, PresentCategory } from '../models/index.js';
 import { protect } from '../middleware/auth.js';
+import { updateUserSpendAndVip } from '../utils/vip.js';
 
 const router = express.Router();
 
@@ -114,6 +115,7 @@ router.post('/send', protect, async (req, res) => {
         relatedTo: 'gift',
         relatedId: gift.id,
       });
+      await updateUserSpendAndVip(senderId, creditCost);
     }
 
     await Notification.create({

@@ -18,6 +18,7 @@ import CreditTransaction from './models/CreditTransaction.js';
 import { Op } from 'sequelize';
 import { getCreditSettings } from './utils/creditSettings.js';
 import { sendOnlineNotification } from './utils/sendgridService.js';
+import { updateUserSpendAndVip } from './utils/vip.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -35,6 +36,7 @@ import agoraRoutes from './routes/agora.js';
 import adminRoutes from './routes/admin.js';
 import wishlistRoutes from './routes/wishlist.js';
 import settingsRoutes from './routes/settings.js';
+import vipRoutes from './routes/vip.js';
 
 dotenv.config();
 
@@ -109,6 +111,7 @@ app.use('/api/agora', agoraRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/vip', vipRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections
@@ -616,6 +619,7 @@ io.on('connection', (socket) => {
                   relatedTo: 'call',
                   relatedId: callRequest.id,
                 });
+                await updateUserSpendAndVip(caller.id, totalCost);
                 console.log(
                   `💳 [SERVER] Deducted ${totalCost} credits from caller ${caller.id} for ${callRequest.callType} call (${billableMinutes} min)`
                 );

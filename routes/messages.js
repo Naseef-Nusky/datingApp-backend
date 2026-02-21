@@ -17,6 +17,7 @@ import { sendEmail as sendSmtpEmail } from '../utils/emailService.js';
 import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings } from '../utils/creditSettings.js';
+import { updateUserSpendAndVip } from '../utils/vip.js';
 
 const router = express.Router();
 
@@ -205,6 +206,7 @@ router.post('/', protect, async (req, res) => {
           relatedTo: 'message',
           relatedId: message.id,
         });
+        await updateUserSpendAndVip(req.user.id, creditsUsed);
       } catch (txError) {
         console.error('Error creating credit transaction for message:', txError);
       }
@@ -1977,6 +1979,7 @@ router.post('/emails/:emailId/unlock-attachment', protect, async (req, res) => {
       relatedTo: 'other',
       relatedId: email.id,
     });
+    await updateUserSpendAndVip(req.user.id, cost);
 
     res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: false, creditsUsed: cost });
   } catch (error) {
