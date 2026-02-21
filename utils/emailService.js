@@ -123,4 +123,58 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
   return await sendEmail(recipient.email, subject, htmlContent);
 };
 
-export default { sendEmail, sendEmailNotification };
+/**
+ * Send magic login link email (email-based login)
+ * @param {string} to - Recipient email
+ * @param {string} firstName - Display name (e.g. from email or profile)
+ * @param {string} loginUrl - Full URL to click to log in
+ * @param {string} userId - User ID for footer
+ */
+export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') => {
+  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const logoUrl = `${frontendUrl}/logonew.png`;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { border-bottom: 3px solid #E97672; padding-bottom: 15px; margin-bottom: 20px; }
+    .logo { max-width: 180px; height: auto; }
+    .login-link { color: #5A2D8A; text-decoration: none; }
+    .button { display: inline-block; background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672); color: #fff !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666; }
+    .footer a { color: #5A2D8A; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+    </div>
+    <p style="font-size: 18px; font-weight: bold;">Hello, ${firstName}!</p>
+    <p>You have requested a login link to access your ${appName} account.</p>
+    <p>Please follow your <a href="${loginUrl}" class="login-link">link to log in</a>.</p>
+    <p style="text-align: center;">
+      <a href="${loginUrl}" class="button">Continue and Log in</a>
+    </p>
+    <p style="font-size: 12px; color: #666;">This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>
+    <div class="footer">
+      <p>If you would like to hear about bonuses and special offers, please add this address to your contacts.</p>
+      <p>Your ID: ${userId || '—'}</p>
+      <p><a href="${frontendUrl}/terms">Terms</a> · <a href="${frontendUrl}/terms#privacy">Privacy Policy</a> · <a href="${frontendUrl}/terms#refund">Refund and Cancellation Policy</a></p>
+      <p><a href="${frontendUrl}/terms#unsubscribe">Unsubscribe here</a></p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  return await sendEmail(to, `Log in to ${appName}`, htmlContent);
+};
+
+export default { sendEmail, sendEmailNotification, sendLoginLinkEmail };

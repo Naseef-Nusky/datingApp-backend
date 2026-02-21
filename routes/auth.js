@@ -5,8 +5,10 @@ import { Op } from 'sequelize';
 import generateToken from '../utils/generateToken.js';
 import { protect } from '../middleware/auth.js';
 import { detectLocation, getClientIP } from '../utils/locationDetector.js';
+import { sendLoginLinkEmail } from '../utils/emailService.js';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 
 const router = express.Router();
 
@@ -71,6 +73,7 @@ router.post(
         email: normalizedEmail, // Use normalized email to ensure consistency
         password,
         userType: userType || 'regular',
+        registrationComplete: true,
       });
 
       // Detect location from IP
@@ -401,6 +404,21 @@ router.get('/me', protect, async (req, res) => {
   }
 });
 
+// @route   PUT /api/auth/me/registration-complete
+// @desc    Mark registration/onboarding as complete (after completing "about you" wizard)
+// @access  Private
+router.put('/me/registration-complete', protect, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    await user.update({ registrationComplete: true });
+    res.json({ registrationComplete: true });
+  } catch (error) {
+    console.error('Registration complete error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   POST /api/auth/resend-verification
 // @desc    Resend verification email
 // @access  Public
@@ -441,6 +459,280 @@ router.post('/resend-verification', [body('email').isEmail()], async (req, res) 
   } catch (error) {
     console.error('Resend verification error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/auth/send-login-link
+// @desc    Send magic login link to email (email-based signup/login, no password)
+// @access  Public
+router.post(
+  '/send-login-link',
+  [body('email').isEmail().normalizeEmail()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const normalizedEmail = req.body.email.toLowerCase().trim();
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+      let user = await User.findOne({
+        where: { email: { [Op.iLike]: normalizedEmail } },
+        include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }],
+      });
+
+      if (!user) {
+        const randomPassword = crypto.randomBytes(12).toString('hex');
+        const hashed = await bcrypt.hash(randomPassword, 10);
+        user = await User.create({
+          email: normalizedEmail,
+          password: hashed,
+          userType: 'regular',
+          registrationComplete: false,
+        });
+        const firstName = normalizedEmail.split('@')[0] || 'User';
+        await Profile.create({
+          userId: user.id,
+          firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
+          lastName: '',
+          age: 18,
+          gender: 'other',
+        });
+        user.profile = { firstName: user.email.split('@')[0] };
+      }
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const loginLinkExpires = new Date(Date.now() + 60 * 60 * 1000);
+      await User.update(
+        { loginLinkToken: hashedToken, loginLinkExpires },
+        { where: { id: user.id } }
+      );
+
+      const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+      const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
+
+      const emailResult = await sendLoginLinkEmail(normalizedEmail, firstName, loginUrl, user.id);
+
+      if (!emailResult.success) {
+        // In development, allow testing without SMTP: log the link and still return success
+        const isDev = process.env.NODE_ENV !== 'production';
+        if (isDev && emailResult.error === 'SMTP not configured') {
+          console.log('\n📧 [DEV] SMTP not configured — use this login link (expires in 1 hour):');
+          console.log(loginUrl);
+          console.log('');
+          return res.status(200).json({
+            message: 'Login link sent',
+            email: normalizedEmail,
+            _devLoginLink: loginUrl,
+          });
+        }
+        console.error('Login link email failed:', emailResult.error);
+        return res.status(500).json({ message: 'Failed to send login email. Please try again.' });
+      }
+
+      res.status(200).json({
+        message: 'Login link sent',
+        email: normalizedEmail,
+      });
+    } catch (error) {
+      console.error('Send login link error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// @route   POST /api/auth/verify-login-link
+// @desc    Exchange one-time token for JWT (called by frontend after user clicks link in email)
+// @access  Public
+router.post(
+  '/verify-login-link',
+  [body('token').trim().notEmpty()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ message: 'Invalid token' });
+      }
+
+      const hashedToken = crypto.createHash('sha256').update(req.body.token.trim()).digest('hex');
+
+      const user = await User.findOne({
+        where: {
+          loginLinkToken: hashedToken,
+          loginLinkExpires: { [Op.gt]: new Date() },
+        },
+      });
+
+      if (!user) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('Login link verify failed: no user found for token (link may be expired, already used, or invalid).');
+        }
+        return res.status(400).json({ message: 'Invalid or expired login link. Request a new one.' });
+      }
+
+      user.loginLinkToken = null;
+      user.loginLinkExpires = null;
+      user.lastLogin = new Date();
+      await user.save();
+
+      const profile = await Profile.findOne({ where: { userId: user.id } });
+      if (profile) {
+        profile.isOnline = true;
+        profile.lastSeen = new Date();
+        await profile.save();
+      }
+
+      const token = generateToken(user.id);
+
+      res.json({
+        token,
+        registrationComplete: user.registrationComplete !== false,
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+          credits: user.credits,
+        },
+        profile: profile ? {
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          age: profile.age,
+          gender: profile.gender,
+        } : null,
+      });
+    } catch (error) {
+      console.error('Verify login link error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// --- Google OAuth ---
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const getBackendUrl = () => process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+
+// @route   GET /api/auth/google
+// @desc    Redirect to Google OAuth consent screen
+// @access  Public
+router.get('/google', (req, res) => {
+  if (!GOOGLE_CLIENT_ID) {
+    console.warn('Google OAuth: GOOGLE_CLIENT_ID not set');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    return res.redirect(`${frontendUrl}/login?error=google_not_configured`);
+  }
+  const backendUrl = getBackendUrl();
+  const redirectUri = `${backendUrl}/api/auth/google/callback`;
+  const scope = 'email profile';
+  const state = crypto.randomBytes(16).toString('hex');
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}&access_type=offline&prompt=consent`;
+  res.redirect(url);
+});
+
+// @route   GET /api/auth/google/callback
+// @desc    Handle Google OAuth callback: exchange code for user, create/find user, redirect to frontend with token
+// @access  Public
+router.get('/google/callback', async (req, res) => {
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const errorRedirect = (msg) => res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(msg)}`);
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return errorRedirect('Google sign-in is not configured');
+  }
+
+  const { code, error: oauthError } = req.query;
+  if (oauthError) {
+    return errorRedirect(oauthError === 'access_denied' ? 'Sign-in was cancelled' : oauthError);
+  }
+  if (!code) {
+    return errorRedirect('Missing authorization code');
+  }
+
+  try {
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/auth/google/callback`;
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      console.error('Google token exchange failed:', tokenRes.status, errText);
+      return errorRedirect('Sign-in failed');
+    }
+
+    const tokens = await tokenRes.json();
+    const accessToken = tokens.access_token;
+    if (!accessToken) {
+      return errorRedirect('Sign-in failed');
+    }
+
+    const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!userInfoRes.ok) {
+      console.error('Google userinfo failed:', userInfoRes.status);
+      return errorRedirect('Sign-in failed');
+    }
+    const googleUser = await userInfoRes.json();
+    const email = (googleUser.email || '').toLowerCase().trim();
+    const firstName = (googleUser.given_name || googleUser.name || email.split('@')[0] || 'User').trim();
+    if (!email) {
+      return errorRedirect('Google account has no email');
+    }
+
+    let user = await User.findOne({
+      where: { email: { [Op.iLike]: email } },
+      include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }],
+    });
+
+    if (!user) {
+      const randomPassword = crypto.randomBytes(12).toString('hex');
+      const hashed = await bcrypt.hash(randomPassword, 10);
+      user = await User.create({
+        email,
+        password: hashed,
+        userType: 'regular',
+        registrationComplete: false,
+      });
+      await Profile.create({
+        userId: user.id,
+        firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
+        lastName: '',
+        age: 18,
+        gender: 'other',
+      });
+    } else {
+      user.lastLogin = new Date();
+      await user.save();
+    }
+
+    const profile = await Profile.findOne({ where: { userId: user.id } });
+    if (profile) {
+      profile.isOnline = true;
+      profile.lastSeen = new Date();
+      await profile.save();
+    }
+
+    const token = generateToken(user.id);
+    const registrationComplete = user.registrationComplete !== false;
+    const targetPath = registrationComplete ? '/dashboard' : '/complete-profile';
+    res.redirect(`${frontendUrl}/auth/google-callback?token=${encodeURIComponent(token)}&to=${encodeURIComponent(targetPath)}`);
+  } catch (err) {
+    console.error('Google OAuth callback error:', err);
+    return errorRedirect('Sign-in failed');
   }
 });
 

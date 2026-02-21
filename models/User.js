@@ -45,6 +45,21 @@ const User = sequelize.define(
       type: DataTypes.DATE,
       allowNull: true,
     },
+    loginLinkToken: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'login_link_token',
+    },
+    loginLinkExpires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'login_link_expires',
+    },
+    registrationComplete: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      field: 'registration_complete',
+    },
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
