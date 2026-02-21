@@ -16,6 +16,8 @@ export const DEFAULT_CREDIT_SETTINGS = {
   videoViewCredits: 15,
   // Cost to listen to one voice message attachment in email (unlock)
   voiceMessageCredits: 10,
+  // Credits required in last 30 days to qualify for or renew VIP (used for all users including existing VIP)
+  vipCreditsRequired: 160,
 };
 
 export const getCreditSettings = async () => {
