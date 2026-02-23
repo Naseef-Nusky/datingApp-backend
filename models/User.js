@@ -100,6 +100,11 @@ const User = sequelize.define(
       allowNull: true,
       field: 'vip_expires_at',
     },
+    isFreeUser: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      field: 'is_free_user',
+    },
     monthlyCreditRefill: {
       type: DataTypes.INTEGER,
       defaultValue: 0,

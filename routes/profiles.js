@@ -293,7 +293,7 @@ router.get('/', protect, async (req, res) => {
       filteredProfiles.map(async (profile) => {
         try {
           const user = await User.findByPk(profile.userId, {
-            attributes: ['id', 'email', 'userType', 'credits', 'isActive'],
+            attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
           });
           
           return {
@@ -388,7 +388,7 @@ router.get('/:id', protect, async (req, res) => {
 
     // Get user details
     const user = await User.findByPk(profile.userId, {
-      attributes: ['id', 'email', 'userType', 'credits', 'isActive'],
+      attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
     });
 
     // Increment profile views

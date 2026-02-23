@@ -1,5 +1,8 @@
 import nodemailer from 'nodemailer';
 
+// Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
+const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
+
 // Email transporter setup
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -81,7 +84,7 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
     <body>
       <div class="container">
         <div class="header">
-          <img src="${(process.env.FRONTEND_URL || 'http://localhost:3000')}/logonew.png" alt="Vantage Dating" style="max-width: 200px; height: auto; margin-bottom: 10px;" />
+          <img src="${EMAIL_LOGO_URL}" alt="Vantage Dating" style="max-width: 200px; height: auto; margin-bottom: 10px;" />
           <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Your next date starts here.</p>
           <h1 style="margin-top: 15px;">${messageType === 'email' ? '📧 New Email' : '💬 New Message'}</h1>
         </div>
@@ -133,7 +136,7 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
 export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') => {
   const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const logoUrl = `${frontendUrl}/logonew.png`;
+  const logoUrl = EMAIL_LOGO_URL;
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -162,7 +165,7 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
     <p style="text-align: center;">
       <a href="${loginUrl}" class="button">Continue and Log in</a>
     </p>
-    <p style="font-size: 12px; color: #666;">This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>
+    <p style="font-size: 12px; color: #666;">If you didn't request this, you can ignore this email.</p>
     <div class="footer">
       <p>If you would like to hear about bonuses and special offers, please add this address to your contacts.</p>
       <p>Your ID: ${userId || '—'}</p>

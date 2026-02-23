@@ -505,9 +505,8 @@ router.post(
 
       const rawToken = crypto.randomBytes(32).toString('hex');
       const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-      const loginLinkExpires = new Date(Date.now() + 60 * 60 * 1000);
       await User.update(
-        { loginLinkToken: hashedToken, loginLinkExpires },
+        { loginLinkToken: hashedToken, loginLinkExpires: null },
         { where: { id: user.id } }
       );
 
@@ -520,7 +519,7 @@ router.post(
         // In development, allow testing without SMTP: log the link and still return success
         const isDev = process.env.NODE_ENV !== 'production';
         if (isDev && emailResult.error === 'SMTP not configured') {
-          console.log('\n📧 [DEV] SMTP not configured — use this login link (expires in 1 hour):');
+          console.log('\n📧 [DEV] SMTP not configured — use this login link:');
           console.log(loginUrl);
           console.log('');
           return res.status(200).json({
@@ -560,17 +559,14 @@ router.post(
       const hashedToken = crypto.createHash('sha256').update(req.body.token.trim()).digest('hex');
 
       const user = await User.findOne({
-        where: {
-          loginLinkToken: hashedToken,
-          loginLinkExpires: { [Op.gt]: new Date() },
-        },
+        where: { loginLinkToken: hashedToken },
       });
 
       if (!user) {
         if (process.env.NODE_ENV !== 'production') {
-          console.warn('Login link verify failed: no user found for token (link may be expired, already used, or invalid).');
+          console.warn('Login link verify failed: no user found for token (link may be already used or invalid).');
         }
-        return res.status(400).json({ message: 'Invalid or expired login link. Request a new one.' });
+        return res.status(400).json({ message: 'Invalid login link. Request a new one.' });
       }
 
       user.loginLinkToken = null;
@@ -611,9 +607,11 @@ router.post(
 );
 
 // --- Google OAuth ---
+// In Google Cloud Console: "Authorized JavaScript origins" = base URL only, no path, no trailing slash (e.g. http://localhost:3000).
+// "Authorized redirect URIs" = full callback URL (e.g. http://localhost:5000/api/auth/google/callback).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const getBackendUrl = () => process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+const getBackendUrl = () => (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/$/, '');
 
 // @route   GET /api/auth/google
 // @desc    Redirect to Google OAuth consent screen
@@ -621,8 +619,8 @@ const getBackendUrl = () => process.env.BACKEND_URL || `http://localhost:${proce
 router.get('/google', (req, res) => {
   if (!GOOGLE_CLIENT_ID) {
     console.warn('Google OAuth: GOOGLE_CLIENT_ID not set');
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    return res.redirect(`${frontendUrl}/login?error=google_not_configured`);
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    return res.redirect(`${frontendUrl}/?error=google_not_configured`);
   }
   const backendUrl = getBackendUrl();
   const redirectUri = `${backendUrl}/api/auth/google/callback`;
@@ -637,7 +635,7 @@ router.get('/google', (req, res) => {
 // @access  Public
 router.get('/google/callback', async (req, res) => {
   const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-  const errorRedirect = (msg) => res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(msg)}`);
+  const errorRedirect = (msg) => res.redirect(`${frontendUrl}/?error=${encodeURIComponent(msg)}`);
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
     return errorRedirect('Google sign-in is not configured');
@@ -714,22 +712,30 @@ router.get('/google/callback', async (req, res) => {
         age: 18,
         gender: 'other',
       });
-    } else {
-      user.lastLogin = new Date();
-      await user.save();
+      user.profile = { firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase() };
     }
 
-    const profile = await Profile.findOne({ where: { userId: user.id } });
-    if (profile) {
-      profile.isOnline = true;
-      profile.lastSeen = new Date();
-      await profile.save();
+    // Send login link email (same flow as magic link): user must click link in email to sign in
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await User.update(
+      { loginLinkToken: hashedToken, loginLinkExpires: null },
+      { where: { id: user.id } }
+    );
+
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+    const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
+    const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
+
+    if (!emailResult.success && process.env.NODE_ENV !== 'production') {
+      console.log('\n📧 [DEV] Google sign-in: SMTP not configured — use this login link:');
+      console.log(loginUrl);
+      console.log('');
     }
 
-    const token = generateToken(user.id);
-    const registrationComplete = user.registrationComplete !== false;
-    const targetPath = registrationComplete ? '/dashboard' : '/complete-profile';
-    res.redirect(`${frontendUrl}/auth/google-callback?token=${encodeURIComponent(token)}&to=${encodeURIComponent(targetPath)}`);
+    // Redirect to frontend: "check your email" (no token; user logs in via email link)
+    const params = new URLSearchParams({ email, login_link_sent: '1' });
+    res.redirect(`${frontendUrl}/auth/google-callback?${params.toString()}`);
   } catch (err) {
     console.error('Google OAuth callback error:', err);
     return errorRedirect('Sign-in failed');
