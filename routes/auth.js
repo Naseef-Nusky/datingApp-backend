@@ -569,8 +569,7 @@ router.post(
         return res.status(400).json({ message: 'Invalid login link. Request a new one.' });
       }
 
-      user.loginLinkToken = null;
-      user.loginLinkExpires = null;
+      // Do not clear loginLinkToken: same link can be used multiple times. It is invalidated only when a new link is requested (send-login-link or Google).
       user.lastLogin = new Date();
       await user.save();
 
