@@ -1218,15 +1218,15 @@ router.post('/mingle', protect, async (req, res) => {
       },
     };
 
-    // Gender filter - map frontend values to backend values
-    if (gender && gender !== 'both') {
-      // Map frontend values (woman/man) to backend values (female/male)
-      if (gender === 'woman') {
+    // Gender filter - normalize any frontend value to DB values (female/male)
+    if (gender && String(gender).toLowerCase() !== 'both') {
+      const rawGender = String(gender).trim().toLowerCase();
+      if (['woman', 'women', 'female', 'f'].includes(rawGender)) {
         where.gender = 'female';
-      } else if (gender === 'man') {
+      } else if (['man', 'men', 'male', 'm'].includes(rawGender)) {
         where.gender = 'male';
       } else {
-        where.gender = gender; // Fallback for other values
+        where.gender = rawGender; // fallback
       }
     }
 
@@ -1306,7 +1306,68 @@ router.post('/mingle', protect, async (req, res) => {
         });
 
         if (existingChat) {
-          // Chat already exists, skip
+          // Requested behavior: mingle should stay as a CHAT REQUEST only,
+          // and should not create direct chat messages / contact updates.
+          let requestForExistingChat = await ChatRequest.findOne({
+            where: {
+              senderId: req.user.id,
+              receiverId: profile.userId,
+              status: 'pending',
+            },
+          });
+          const hadPendingRequest = !!requestForExistingChat;
+
+          if (requestForExistingChat) {
+            await requestForExistingChat.update({
+              firstMessage: message.trim(),
+              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            });
+          } else {
+            requestForExistingChat = await ChatRequest.create({
+              senderId: req.user.id,
+              receiverId: profile.userId,
+              firstMessage: message.trim(),
+              status: 'pending',
+              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            });
+          }
+
+          // Notify receiver about chat request only
+          try {
+            await Notification.create({
+              userId: profile.userId,
+              type: 'chat_request',
+              title: 'New Chat Request',
+              message: 'You have a new chat request',
+              relatedId: requestForExistingChat.id,
+              relatedType: 'chat_request',
+            });
+          } catch (notifError) {
+            console.error('Error creating notification for existing chat mingle request:', notifError);
+          }
+
+          if (req.io) {
+            try {
+              const receiverIdStr = String(profile.userId);
+              req.io.to(`user-${receiverIdStr}`).emit('new-chat-request', {
+                requestId: requestForExistingChat.id,
+                senderId: req.user.id,
+                receiverId: profile.userId,
+                firstMessage: message.trim(),
+                createdAt: requestForExistingChat.createdAt,
+              });
+            } catch (socketError) {
+              console.error('Error emitting mingle chat-request socket event:', socketError);
+            }
+          }
+
+          sentRequests.push({
+            id: profile.id,
+            userId: profile.userId,
+            firstName: profile.firstName,
+            photos: profile.photos || [],
+            deliveryType: hadPendingRequest ? 'request-updated' : 'request',
+          });
           continue;
         }
 
@@ -1320,7 +1381,19 @@ router.post('/mingle', protect, async (req, res) => {
         });
 
         if (existingRequest) {
-          // Request already sent, skip
+          // Pending request already exists: refresh its message + expiry so mingle feels re-sent.
+          await existingRequest.update({
+            firstMessage: message.trim(),
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          });
+
+          sentRequests.push({
+            id: profile.id,
+            userId: profile.userId,
+            firstName: profile.firstName,
+            photos: profile.photos || [],
+            deliveryType: 'request-updated',
+          });
           continue;
         }
 

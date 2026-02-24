@@ -630,10 +630,21 @@ router.post(
       }
 
       const token = generateToken(user.id, user.userType);
+      // Force profile completion flow when user is flagged incomplete,
+      // profile record is missing, or profile data is still onboarding-level.
+      const hasPhoto = Array.isArray(profile?.photos) && profile.photos.length > 0;
+      const hasLookingFor = Boolean(profile?.preferences?.lookingFor);
+      const hasBasicProfile =
+        Boolean(profile?.firstName) &&
+        Boolean(profile?.gender) &&
+        Number(profile?.age || 0) >= 18;
+      const profileLooksIncomplete = !profile || !hasBasicProfile || !hasLookingFor || !hasPhoto;
+      const needsProfileCompletion = user.registrationComplete === false || profileLooksIncomplete;
 
       res.json({
         token,
-        registrationComplete: user.registrationComplete !== false,
+        registrationComplete: !needsProfileCompletion,
+        needsProfileCompletion,
         user: {
           id: user.id,
           email: user.email,

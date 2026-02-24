@@ -124,19 +124,27 @@ router.get('/', protect, async (req, res) => {
     console.log('Current user ID:', req.user.id);
     console.log('Limit:', parseInt(limit), 'Offset:', offset);
 
-    // Streamers/talent must only see real users (no other streamers)
+    // Join with User to control which account types are visible in browse.
+    // - Regular users should NEVER see admin/superadmin/moderator/viewer accounts.
+    // - Regular users can see real users + streamers.
+    // - Streamers/talent must only see real users (no other streamers/admins).
     const isStreamerOrTalent = req.user.userType === 'streamer' || req.user.userType === 'talent';
-    const includeForBrowse = isStreamerOrTalent
-      ? [
-          {
-            model: User,
-            as: 'user',
-            attributes: [],
-            where: { userType: 'regular' },
-            required: true,
-          },
-        ]
-      : [];
+    const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
+
+    const includeForBrowse = [
+      {
+        model: User,
+        as: 'user',
+        attributes: [],
+        where: isStreamerOrTalent
+          ? { userType: 'regular', registrationComplete: true }
+          : {
+              userType: { [Op.notIn]: adminRoles },
+              registrationComplete: true,
+            },
+        required: true,
+      },
+    ];
     
     // First, let's check total profiles in database
     const totalProfiles = await Profile.count();
@@ -376,10 +384,31 @@ router.get('/', protect, async (req, res) => {
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
-    const profile = await Profile.findOne({ where: { userId: req.user.id } });
-    
+    let profile = await Profile.findOne({ where: { userId: req.user.id } });
+
+    // Legacy/login-link edge case: user exists but profile row is missing.
+    // Auto-create a minimal profile so onboarding can continue.
     if (!profile) {
-      return res.status(404).json({ message: 'Profile not found' });
+      const user = await User.findByPk(req.user.id, {
+        attributes: ['id', 'email', 'userType'],
+      });
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      const fallbackName = (user.email || 'user').split('@')[0] || 'User';
+      profile = await Profile.create({
+        userId: user.id,
+        firstName: fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1),
+        lastName: '',
+        age: 18,
+        gender: 'other',
+        bio: '',
+        location: {},
+        interests: [],
+        lifestyle: {},
+        preferences: {},
+        wishlist: [],
+      });
     }
 
     res.json(profile);
@@ -442,13 +471,29 @@ router.get('/:id', protect, async (req, res) => {
 // @access  Private
 router.put('/me', protect, async (req, res) => {
   try {
-    const profile = await Profile.findOne({ where: { userId: req.user.id } });
-    
-    if (!profile) {
-      return res.status(404).json({ message: 'Profile not found' });
-    }
-
     const updates = req.body;
+    let profile = await Profile.findOne({ where: { userId: req.user.id } });
+
+    // If profile is missing (legacy/incomplete account), create one so onboarding can continue.
+    if (!profile) {
+      const safeGender = ['male', 'female', 'other'].includes(updates.gender) ? updates.gender : 'other';
+      const safeAge = Number.isFinite(parseInt(updates.age, 10)) && parseInt(updates.age, 10) >= 18
+        ? parseInt(updates.age, 10)
+        : 18;
+      profile = await Profile.create({
+        userId: req.user.id,
+        firstName: (updates.firstName || 'User').trim(),
+        lastName: (updates.lastName || '').trim(),
+        age: safeAge,
+        gender: safeGender,
+        bio: updates.bio || '',
+        location: updates.location || {},
+        interests: Array.isArray(updates.interests) ? updates.interests : [],
+        lifestyle: updates.lifestyle || {},
+        preferences: updates.preferences || {},
+        wishlist: Array.isArray(updates.wishlist) ? updates.wishlist : [],
+      });
+    }
     
     // Regular users cannot change location (unless streamer/talent)
     if (updates.location && req.user.userType === 'regular') {

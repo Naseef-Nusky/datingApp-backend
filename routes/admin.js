@@ -6,7 +6,25 @@ import crypto from 'crypto';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
-import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog, Gift, Notification, PresentCategory, Chat, Message } from '../models/index.js';
+import {
+  User,
+  Profile,
+  Report,
+  WishlistCategory,
+  WishlistProduct,
+  GiftCatalog,
+  Gift,
+  Notification,
+  PresentCategory,
+  Chat,
+  Message,
+  Match,
+  ChatRequest,
+  CallRequest,
+  Story,
+  CreditTransaction,
+  Block,
+} from '../models/index.js';
 import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
@@ -569,6 +587,109 @@ router.put('/users/:id/toggle-verified', protect, superadmin, async (req, res) =
     });
   } catch (error) {
     console.error('Error toggling user verification:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/users/:id
+// @desc    Permanently delete a non-admin user (real user or streamer) and their profile
+// @access  Superadmin only
+router.delete('/users/:id', protect, superadmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Never allow deleting admin/superadmin/moderator/viewer with this endpoint
+    const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
+    if (adminRoles.includes(user.userType)) {
+      return res.status(400).json({ message: 'Cannot delete admin users via this endpoint' });
+    }
+
+    // Clean up all related data that references this user to satisfy foreign keys
+    // Messages where user is sender or receiver
+    await Message.destroy({
+      where: {
+        [Op.or]: [{ sender: id }, { receiver: id }],
+      },
+    });
+
+    // Chat requests where user is sender or receiver
+    await ChatRequest.destroy({
+      where: {
+        [Op.or]: [{ senderId: id }, { receiverId: id }],
+      },
+    });
+
+    // Call requests where user is caller or receiver
+    await CallRequest.destroy({
+      where: {
+        [Op.or]: [{ callerId: id }, { receiverId: id }],
+      },
+    });
+
+    // Gifts sent or received by this user
+    await Gift.destroy({
+      where: {
+        [Op.or]: [{ sender: id }, { receiver: id }],
+      },
+    });
+
+    // Credit transactions for this user
+    await CreditTransaction.destroy({
+      where: { userId: id },
+    });
+
+    // Notifications for this user
+    await Notification.destroy({
+      where: { userId: id },
+    });
+
+    // Reports where user is reporter or reported
+    await Report.destroy({
+      where: {
+        [Op.or]: [{ reporter: id }, { reportedUser: id }],
+      },
+    });
+
+    // Blocks involving this user
+    await Block.destroy({
+      where: {
+        [Op.or]: [{ blocker: id }, { blocked: id }],
+      },
+    });
+
+    // Matches involving this user
+    await Match.destroy({
+      where: {
+        [Op.or]: [{ user1: id }, { user2: id }],
+      },
+    });
+
+    // Stories created by this user
+    await Story.destroy({
+      where: { userId: id },
+    });
+
+    // Chats where this user participates
+    await Chat.destroy({
+      where: {
+        [Op.or]: [{ user1Id: id }, { user2Id: id }],
+      },
+    });
+
+    // Delete profile last (if exists)
+    await Profile.destroy({ where: { userId: id } });
+
+    // Finally delete the user record (hard delete)
+    await user.destroy();
+
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
