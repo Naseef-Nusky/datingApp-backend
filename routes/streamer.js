@@ -1,15 +1,83 @@
 import express from 'express';
+import { Op } from 'sequelize';
 import Profile from '../models/Profile.js';
+import User from '../models/User.js';
 import { protect, streamer, admin } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// Real-users-only filter: streamers see only real users (userType regular), never other streamers
+const realUsersWhere = {
+  userType: 'regular',
+  isActive: true,
+};
+
+// @route   GET /api/streamer/online-users
+// @desc    Streamers see ONLY real users who are online. No streamers, no admin-created profiles. Server-controlled.
+// @access  Private (Streamer only)
+router.get('/online-users', protect, streamer, async (req, res) => {
+  try {
+    const profiles = await Profile.findAll({
+      where: { isOnline: true },
+      include: [
+        {
+          model: User,
+          as: 'user',
+          where: realUsersWhere,
+          attributes: ['id', 'email'],
+          required: true,
+        },
+      ],
+      attributes: ['id', 'userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'isOnline', 'lastSeen'],
+    });
+    const users = profiles.map((p) => ({
+      id: p.userId,
+      ...p.toJSON(),
+      user: p.user,
+    }));
+    res.json({ users });
+  } catch (error) {
+    console.error('Streamer online-users error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/streamer/users
+// @desc    Streamers see ALL real users (online + offline). Only real users, never other streamers. Includes isOnline/lastSeen so streamers can identify who is online.
+// @access  Private (Streamer only)
+router.get('/users', protect, streamer, async (req, res) => {
+  try {
+    const profiles = await Profile.findAll({
+      include: [
+        {
+          model: User,
+          as: 'user',
+          where: realUsersWhere,
+          attributes: ['id', 'email'],
+          required: true,
+        },
+      ],
+      attributes: ['id', 'userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'isOnline', 'lastSeen'],
+      order: [['isOnline', 'DESC'], ['lastSeen', 'DESC']],
+    });
+    const users = profiles.map((p) => ({
+      id: p.userId,
+      ...p.toJSON(),
+      user: p.user,
+    }));
+    res.json({ users });
+  } catch (error) {
+    console.error('Streamer users error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 
 // @route   GET /api/streamer/earnings
 // @desc    Get streamer earnings
 // @access  Private (Streamer only)
 router.get('/earnings', protect, streamer, async (req, res) => {
   try {
-    const profile = await Profile.findOne({ userId: req.user._id });
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
     
     if (!profile) {
       return res.status(404).json({ message: 'Profile not found' });
@@ -31,7 +99,7 @@ router.get('/earnings', protect, streamer, async (req, res) => {
 router.post('/payout-request', protect, streamer, async (req, res) => {
   try {
     const { amount } = req.body;
-    const profile = await Profile.findOne({ userId: req.user._id });
+    const profile = await Profile.findOne({ where: { userId: req.user.id } });
     
     if (!profile) {
       return res.status(404).json({ message: 'Profile not found' });

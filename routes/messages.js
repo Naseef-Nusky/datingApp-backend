@@ -143,14 +143,16 @@ router.post('/', protect, async (req, res) => {
     }
 
     // Credit handling for regular chat messages (configured via CRM)
+    // IMPORTANT: Streamers/talents should NOT be charged credits – only real users pay.
     let creditsUsed = 0;
 
     // Charge credits only for interactive chat messages (not emails, intros, gifts, etc.)
     const nonChargeableTypes = ['email', 'intro', 'gift'];
     const effectiveType = messageType === 'chat' ? 'text' : messageType;
     const isChargeableChat = !nonChargeableTypes.includes(effectiveType);
+    const isStreamerSender = req.user.userType === 'streamer' || req.user.userType === 'talent';
 
-    if (isChargeableChat) {
+    if (isChargeableChat && !isStreamerSender) {
       const costPerMessage = await getChatMessageCost();
       if (costPerMessage > 0) {
         const user = await User.findByPk(req.user.id, { attributes: ['id', 'credits'] });
@@ -328,6 +330,15 @@ router.get('/', protect, async (req, res) => {
         if (chat.user1Id !== req.user.id && chat.user2Id !== req.user.id) {
           return res.status(403).json({ message: 'Not authorized for this chat' });
         }
+        // Streamers may only view chats where the other party is a real user (not other streamers)
+        const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
+        if (isStreamer) {
+          const otherUserId = chat.user1Id === req.user.id ? chat.user2Id : chat.user1Id;
+          const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'userType'] });
+          if (!otherUser || otherUser.userType !== 'regular') {
+            return res.status(403).json({ message: 'Not authorized to view this conversation' });
+          }
+        }
       } catch (chatError) {
         // Chat table might not exist yet, fall back to userId method
         console.log('Chat table may not exist, using userId method:', chatError.message);
@@ -336,6 +347,14 @@ router.get('/', protect, async (req, res) => {
     } 
     // If userId provided (backward compatibility), find or create chat
     if (userId && !chat) {
+      // Streamers may only load messages with real users (not other streamers)
+      const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
+      if (isStreamer) {
+        const otherUser = await User.findByPk(userId, { attributes: ['id', 'userType'] });
+        if (!otherUser || otherUser.userType !== 'regular') {
+          return res.status(403).json({ message: 'Not authorized to view this conversation' });
+        }
+      }
       try {
         chat = await findOrCreateChat(req.user.id, userId);
       } catch (chatError) {
@@ -344,7 +363,7 @@ router.get('/', protect, async (req, res) => {
         chat = null;
       }
     }
-    
+
     if (!chatId && !userId) {
       return res.status(400).json({ message: 'Chat ID or User ID required' });
     }
@@ -504,7 +523,7 @@ router.delete('/:messageId', protect, async (req, res) => {
 });
 
 // @route   GET /api/messages/chats
-// @desc    Get all chats for current user
+// @desc    Get all chats for current user. Streamers only see chats with real users (server-controlled).
 // @access  Private
 router.get('/chats', protect, async (req, res) => {
   try {
@@ -519,26 +538,26 @@ router.get('/chats', protect, async (req, res) => {
         {
           model: User,
           as: 'user1Data',
-          attributes: ['id', 'email'],
+          attributes: ['id', 'email', 'userType'],
         },
         {
           model: User,
           as: 'user2Data',
-          attributes: ['id', 'email'],
+          attributes: ['id', 'email', 'userType'],
         },
       ],
       order: [['last_message_at', 'DESC']], // Use snake_case to match database column
     });
 
     // Get unread counts and last messages for each chat
-    const chatsWithDetails = await Promise.all(
+    let chatsWithDetails = await Promise.all(
       chats.map(async (chat) => {
-        const otherUser = chat.user1Id === req.user.id 
-          ? chat.user2Data 
+        const otherUser = chat.user1Id === req.user.id
+          ? chat.user2Data
           : chat.user1Data;
-        
-        const unreadCount = chat.user1Id === req.user.id 
-          ? chat.unreadCountUser1 
+
+        const unreadCount = chat.user1Id === req.user.id
+          ? chat.unreadCountUser1
           : chat.unreadCountUser2;
 
         const lastMessage = await Message.findOne({
@@ -567,6 +586,14 @@ router.get('/chats', protect, async (req, res) => {
       })
     );
 
+    // Streamers see ONLY chats where the other party is a real user (no other streamers)
+    const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
+    if (isStreamer) {
+      chatsWithDetails = chatsWithDetails.filter(
+        (c) => c.otherUser && c.otherUser.userType === 'regular'
+      );
+    }
+
     res.json(chatsWithDetails);
   } catch (error) {
     console.error('Get chats error:', error);
@@ -594,7 +621,7 @@ router.get('/conversations', protect, async (req, res) => {
           {
             model: User,
             as: 'user1Data',
-            attributes: ['id', 'email'],
+            attributes: ['id', 'email', 'userType'],
             include: [{
               model: Profile,
               as: 'profile',
@@ -604,7 +631,7 @@ router.get('/conversations', protect, async (req, res) => {
           {
             model: User,
             as: 'user2Data',
-            attributes: ['id', 'email'],
+            attributes: ['id', 'email', 'userType'],
             include: [{
               model: Profile,
               as: 'profile',
@@ -622,14 +649,14 @@ router.get('/conversations', protect, async (req, res) => {
 
     // If we have chats, process them
     if (chats.length > 0) {
-      const conversations = await Promise.all(
+      let conversations = await Promise.all(
         chats.map(async (chat) => {
-          const otherUser = chat.user1Id === req.user.id 
-            ? chat.user2Data 
+          const otherUser = chat.user1Id === req.user.id
+            ? chat.user2Data
             : chat.user1Data;
-          
-          const unreadCount = chat.user1Id === req.user.id 
-            ? chat.unreadCountUser1 
+
+          const unreadCount = chat.user1Id === req.user.id
+            ? chat.unreadCountUser1
             : chat.unreadCountUser2;
 
           const lastMessage = await Message.findOne({
@@ -647,11 +674,21 @@ router.get('/conversations', protect, async (req, res) => {
               email: otherUser.email,
               profile: otherUser.profile,
             },
+            otherUserRole: otherUser.userType,
             lastMessage,
             unreadCount,
           };
         })
       );
+
+      // Streamers see ONLY conversations with real users (no other streamers)
+      const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
+      if (isStreamer) {
+        conversations = conversations.filter((c) => c.otherUserRole === 'regular');
+        conversations.forEach((c) => {
+          delete c.otherUserRole;
+        });
+      }
 
       return res.json(conversations);
     }
@@ -669,7 +706,7 @@ router.get('/conversations', protect, async (req, res) => {
         {
           model: User,
           as: 'senderData',
-          attributes: ['id', 'email'],
+          attributes: ['id', 'email', 'userType'],
           include: [{
             model: Profile,
             as: 'profile',
@@ -679,7 +716,7 @@ router.get('/conversations', protect, async (req, res) => {
         {
           model: User,
           as: 'receiverData',
-          attributes: ['id', 'email'],
+          attributes: ['id', 'email', 'userType'],
           include: [{
             model: Profile,
             as: 'profile',
@@ -692,16 +729,21 @@ router.get('/conversations', protect, async (req, res) => {
 
     // Group by conversation partner
     const conversationsMap = new Map();
+    const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
     
     for (const message of allMessages) {
       const otherUserId = message.sender === req.user.id 
         ? message.receiver 
         : message.sender;
       
-      const otherUser = message.sender === req.user.id 
-        ? message.receiverData 
+      const otherUser = message.sender === req.user.id
+        ? message.receiverData
         : message.senderData;
-      
+
+      if (isStreamer) {
+        if (otherUser.userType !== 'regular') continue;
+      }
+
       if (!conversationsMap.has(otherUserId)) {
         conversationsMap.set(otherUserId, {
           userId: otherUserId,
@@ -728,7 +770,7 @@ router.get('/conversations', protect, async (req, res) => {
       }
     }
 
-    const conversations = Array.from(conversationsMap.values());
+    let conversations = Array.from(conversationsMap.values());
     res.json(conversations);
   } catch (error) {
     console.error('❌ [GET CONVERSATIONS] Error:', error);

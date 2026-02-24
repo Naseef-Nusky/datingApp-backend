@@ -76,6 +76,11 @@ router.post('/subscribe', protect, async (req, res) => {
 
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Streamers/talents do not need subscriptions or refill plans
+    if (user.userType === 'streamer' || user.userType === 'talent') {
+      return res.status(403).json({ message: 'Streamers do not need subscriptions' });
+    }
     const planDetails = SUBSCRIPTION_PLANS[plan];
 
     const expires = new Date();
@@ -142,6 +147,11 @@ router.post('/purchase', protect, async (req, res) => {
 
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Block streamers/talents from using direct credit purchase/refill
+    if (user.userType === 'streamer' || user.userType === 'talent') {
+      return res.status(403).json({ message: 'Streamers cannot purchase credits' });
+    }
     const newCredits = (user.credits || 0) + amount;
     await user.update({ credits: newCredits });
 

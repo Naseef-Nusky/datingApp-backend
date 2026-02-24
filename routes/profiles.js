@@ -123,6 +123,20 @@ router.get('/', protect, async (req, res) => {
     console.log('Query where clause:', JSON.stringify(where, null, 2));
     console.log('Current user ID:', req.user.id);
     console.log('Limit:', parseInt(limit), 'Offset:', offset);
+
+    // Streamers/talent must only see real users (no other streamers)
+    const isStreamerOrTalent = req.user.userType === 'streamer' || req.user.userType === 'talent';
+    const includeForBrowse = isStreamerOrTalent
+      ? [
+          {
+            model: User,
+            as: 'user',
+            attributes: [],
+            where: { userType: 'regular' },
+            required: true,
+          },
+        ]
+      : [];
     
     // First, let's check total profiles in database
     const totalProfiles = await Profile.count();
@@ -130,9 +144,11 @@ router.get('/', protect, async (req, res) => {
     
     const { count, rows: profiles } = await Profile.findAndCountAll({
       where,
+      include: includeForBrowse,
       limit: parseInt(limit),
       offset: offset,
       order: [['createdAt', 'DESC']],
+      distinct: true,
     });
 
     console.log(`Found ${count} total profiles matching basic criteria`);

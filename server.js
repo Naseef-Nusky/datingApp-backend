@@ -687,6 +687,11 @@ io.on('connection', (socket) => {
     if (userId) {
       console.log(`👋 User ${userId} disconnected (socket: ${socket.id})`);
       socketUserMap.delete(socket.id);
+      // Set offline + last_seen (role-based: backend controls online status)
+      Profile.update(
+        { isOnline: false, lastSeen: new Date() },
+        { where: { userId } }
+      ).catch((err) => console.error('Disconnect: update profile offline error', err.message));
     } else {
       console.log('👋 User disconnected:', socket.id);
     }

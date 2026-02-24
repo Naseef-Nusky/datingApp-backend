@@ -24,7 +24,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // @route   POST /api/auth/register
-// @desc    Register a new user
+// @desc    Register a new user (always regular). Streamers and admins are created only via admin CRM.
 // @access  Public
 router.post(
   '/register',
@@ -42,22 +42,22 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, password, firstName, lastName, age, gender, userType } = req.body;
+      const { email, password, firstName, lastName, age, gender } = req.body;
 
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
       // Check if user with this email already exists (case-insensitive)
-      const userExists = await User.findOne({ 
-        where: { 
+      const userExists = await User.findOne({
+        where: {
           email: {
             [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
           }
-        } 
+        }
       });
-      
+
       if (userExists) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: 'Email address already registered',
           field: 'email'
         });
@@ -68,11 +68,12 @@ router.post(
         return res.status(400).json({ message: 'Must be 18 or older to register' });
       }
 
-      // Create user with normalized email (lowercase)
+      // Frontend registration = real users only. Never trust role from client; streamers/admins are created only in CRM.
       const user = await User.create({
-        email: normalizedEmail, // Use normalized email to ensure consistency
+        email: normalizedEmail,
         password,
-        userType: userType || 'regular',
+        userType: 'regular',
+        isAdminCreated: false,
         registrationComplete: true,
       });
 
@@ -97,8 +98,8 @@ router.post(
         }
       );
 
-      // Generate token
-      const token = generateToken(user.id);
+      // Generate token (payload includes role for role-based UI)
+      const token = generateToken(user.id, user.userType);
 
       res.status(201).json({
         token,
@@ -211,7 +212,7 @@ router.post(
       user.lastLogin = new Date();
       await user.save();
 
-      const token = generateToken(user.id);
+      const token = generateToken(user.id, user.userType);
       return res.json({
         token,
         user: {
@@ -228,8 +229,56 @@ router.post(
   }
 );
 
+// @route   POST /api/auth/user-login
+// @desc    Login for dating app (regular users only). Streamers/admins use their own login.
+// @access  Public
+router.post(
+  '/user-login',
+  [body('email').isEmail().normalizeEmail(), body('password').exists()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const normalizedEmail = req.body.email.toLowerCase().trim();
+      const user = await User.findOne({
+        where: { email: { [Op.iLike]: normalizedEmail } },
+      });
+      if (!user) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      const isMatch = await user.matchPassword(req.body.password);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      if (user.userType !== 'regular') {
+        return res.status(403).json({
+          message: 'Use the correct login: streamers use /api/auth/streamer-login, admins use /api/auth/admin-login',
+        });
+      }
+      user.lastLogin = new Date();
+      await user.save();
+      const profile = await Profile.findOne({ where: { userId: user.id } });
+      if (profile) {
+        profile.isOnline = true;
+        profile.lastSeen = new Date();
+        await profile.save();
+      }
+      const token = generateToken(user.id, user.userType);
+      res.json({
+        token,
+        user: { id: user.id, email: user.email, userType: user.userType, credits: user.credits },
+      });
+    } catch (error) {
+      console.error('User login error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   POST /api/auth/login
-// @desc    Login user
+// @desc    Login (any role – backward compatible). Prefer user-login / streamer-login / admin-login for role separation.
 // @access  Public
 router.post(
   '/login',
@@ -276,7 +325,7 @@ router.post(
         await profile.save();
       }
 
-      const token = generateToken(user.id);
+      const token = generateToken(user.id, user.userType);
 
       res.json({
         token,
@@ -580,7 +629,7 @@ router.post(
         await profile.save();
       }
 
-      const token = generateToken(user.id);
+      const token = generateToken(user.id, user.userType);
 
       res.json({
         token,

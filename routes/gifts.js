@@ -83,17 +83,23 @@ router.post('/send', protect, async (req, res) => {
     const creditCost = parseInt(giftItem.creditCost, 10) || 0;
     const senderId = req.user.id;
 
+    // Streamers/talents should NOT be forced to pay credits.
+    // Only real users (regular) get charged when sending gifts.
     if (creditCost > 0) {
-      const user = await User.findByPk(senderId, { attributes: ['id', 'credits'] });
+      const user = await User.findByPk(senderId, { attributes: ['id', 'credits', 'userType'] });
       if (!user) return res.status(401).json({ message: 'User not found' });
-      if ((user.credits || 0) < creditCost) {
-        return res.status(400).json({
-          message: 'Insufficient credits',
-          required: creditCost,
-          balance: user.credits || 0,
-        });
+
+      const isStreamerSender = user.userType === 'streamer' || user.userType === 'talent';
+      if (!isStreamerSender) {
+        if ((user.credits || 0) < creditCost) {
+          return res.status(400).json({
+            message: 'Insufficient credits',
+            required: creditCost,
+            balance: user.credits || 0,
+          });
+        }
+        await user.decrement('credits', { by: creditCost });
       }
-      await user.decrement('credits', { by: creditCost });
     }
 
     const giftType = giftItem.type === 'physical' ? 'physical' : 'virtual';
@@ -107,15 +113,20 @@ router.post('/send', protect, async (req, res) => {
     });
 
     if (creditCost > 0) {
-      await CreditTransaction.create({
-        userId: senderId,
-        type: 'usage',
-        amount: -creditCost,
-        description: `Gift: ${giftItem.name}`,
-        relatedTo: 'gift',
-        relatedId: gift.id,
-      });
-      await updateUserSpendAndVip(senderId, creditCost);
+      // Only record a spending transaction + VIP spend for non-streamers.
+      const senderUser = await User.findByPk(senderId, { attributes: ['id', 'userType'] });
+      const isStreamerSender = senderUser?.userType === 'streamer' || senderUser?.userType === 'talent';
+      if (!isStreamerSender) {
+        await CreditTransaction.create({
+          userId: senderId,
+          type: 'usage',
+          amount: -creditCost,
+          description: `Gift: ${giftItem.name}`,
+          relatedTo: 'gift',
+          relatedId: gift.id,
+        });
+        await updateUserSpendAndVip(senderId, creditCost);
+      }
     }
 
     await Notification.create({

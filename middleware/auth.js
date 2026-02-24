@@ -55,3 +55,12 @@ export const streamer = (req, res, next) => {
   }
 };
 
+/** Regular dating users only (no streamers/admins). Use for /api/user/* or discover. */
+export const regularUser = (req, res, next) => {
+  if (req.user && req.user.userType === 'regular') {
+    next();
+  } else {
+    res.status(403).json({ message: 'User access required' });
+  }
+};
+

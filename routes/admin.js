@@ -2,14 +2,15 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
-import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog, Gift, Notification, PresentCategory } from '../models/index.js';
+import { User, Profile, Report, WishlistCategory, WishlistProduct, GiftCatalog, Gift, Notification, PresentCategory, Chat, Message } from '../models/index.js';
 import { protect, admin, superadmin } from '../middleware/auth.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
-import { uploadToSpaces } from '../utils/spacesUpload.js';
+import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +29,16 @@ const wishlistUpload = multer({
   },
 });
 const giftImageUpload = wishlistUpload; // same config, folder set in saveGiftImage
+
+// Multer for admin profile photo upload (memory for Spaces)
+const profilePhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'), false);
+  },
+});
 
 // ============================================
 // Admin Users Routes (for managing admin accounts)
@@ -90,7 +101,7 @@ router.post(
   superadmin,
   [
     body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 6 }),
+    body('password').optional().isLength({ min: 6 }),
     body('firstName').trim().notEmpty(),
     body('role').isIn(['superadmin', 'admin', 'moderator', 'viewer']),
   ],
@@ -102,6 +113,9 @@ router.post(
       }
 
       const { email, password, firstName, lastName, role } = req.body;
+      const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
+        ? password.trim()
+        : crypto.randomBytes(24).toString('hex');
 
       // Check if user already exists
       const existingUser = await User.findOne({
@@ -117,7 +131,7 @@ router.post(
       // Create admin user
       const adminUser = await User.create({
         email: email.toLowerCase().trim(),
-        password, // Will be hashed by User model hooks
+        password: passwordToSet, // Will be hashed by User model hooks
         userType: role || 'admin',
         isVerified: true,
         isActive: true,
@@ -266,46 +280,56 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
 // ============================================
 
 // @route   GET /api/admin/users
-// @desc    Get all regular users. filter: all|active|inactive|verified|unverified|neverSpent|noSpend7d|noSpend30d
+// @desc    Get users. type: all|real|streamers. filter: all|active|inactive|verified|unverified|neverSpent|noSpend7d|noSpend30d
 // @access  Superadmin or Viewer
 router.get('/users', protect, admin, async (req, res) => {
   try {
-    const { filter } = req.query;
+    const { filter, type } = req.query;
 
-    const whereClause = {
-      userType: {
-        [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
-      },
-    };
-
+    const andParts = [];
+    andParts.push({
+      userType: type === 'streamers'
+        ? { [Op.in]: ['streamer', 'talent'] }
+        : type === 'real'
+          ? 'regular'
+          : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'] },
+    });
     if (filter === 'active') {
-      whereClause.isActive = true;
+      andParts.push({ isActive: true });
     } else if (filter === 'inactive') {
-      whereClause.isActive = false;
+      andParts.push({ isActive: false });
     } else if (filter === 'verified') {
-      whereClause.isVerified = true;
+      andParts.push({ isVerified: true });
     } else if (filter === 'unverified') {
-      whereClause.isVerified = false;
+      andParts.push({ isVerified: false });
     } else if (filter === 'neverSpent') {
-      whereClause[Op.or] = [
-        { totalCreditsSpent: 0 },
-        { totalCreditsSpent: null },
-      ];
+      andParts.push({
+        [Op.or]: [
+          { totalCreditsSpent: 0 },
+          { totalCreditsSpent: null },
+        ],
+      });
     } else if (filter === 'noSpend7d') {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      whereClause[Op.or] = [
-        { lastCreditSpentAt: null },
-        { lastCreditSpentAt: { [Op.lt]: sevenDaysAgo } },
-      ];
+      andParts.push({
+        [Op.or]: [
+          { lastCreditSpentAt: null },
+          { lastCreditSpentAt: { [Op.lt]: sevenDaysAgo } },
+        ],
+      });
     } else if (filter === 'noSpend30d') {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      whereClause[Op.or] = [
-        { lastCreditSpentAt: null },
-        { lastCreditSpentAt: { [Op.lt]: thirtyDaysAgo } },
-      ];
+      andParts.push({
+        [Op.or]: [
+          { lastCreditSpentAt: null },
+          { lastCreditSpentAt: { [Op.lt]: thirtyDaysAgo } },
+        ],
+      });
     }
+
+    const whereClause = andParts.length > 1 ? { [Op.and]: andParts } : andParts[0];
 
     const users = await User.findAll({
       where: whereClause,
@@ -313,7 +337,7 @@ router.get('/users', protect, admin, async (req, res) => {
         {
           model: Profile,
           as: 'profile',
-          attributes: ['firstName', 'lastName', 'age', 'gender', 'photos'],
+          attributes: ['firstName', 'lastName', 'age', 'gender', 'photos', 'isOnline', 'lastSeen'],
         },
       ],
       attributes: [
@@ -339,7 +363,7 @@ router.post(
   admin,
   [
     body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 6 }),
+    body('password').optional().isLength({ min: 6 }),
     body('firstName').trim().notEmpty(),
     body('age').isInt({ min: 18 }),
     body('gender').isIn(['male', 'female', 'other']),
@@ -357,6 +381,9 @@ router.post(
       }
 
       const { email, password, firstName, lastName, age, gender } = req.body;
+      const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
+        ? password.trim()
+        : crypto.randomBytes(24).toString('hex');
 
       // Check if user already exists
       const existingUser = await User.findOne({
@@ -372,7 +399,7 @@ router.post(
       // Create user
       const user = await User.create({
         email: email.toLowerCase().trim(),
-        password, // Will be hashed by User model hooks
+        password: passwordToSet, // Will be hashed by User model hooks
         userType: 'regular',
         isVerified: true,
         isActive: true,
@@ -402,6 +429,73 @@ router.post(
       });
     } catch (error) {
       console.error('Error creating user:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   POST /api/admin/streamers
+// @desc    Create a new streamer (talent) user from CRM
+// @access  Superadmin or Viewer
+router.post(
+  '/streamers',
+  protect,
+  admin,
+  [
+    body('email').isEmail().normalizeEmail(),
+    body('password').optional().isLength({ min: 6 }),
+    body('firstName').trim().notEmpty(),
+    body('age').optional().isInt({ min: 18 }),
+    body('gender').optional().isIn(['male', 'female', 'other']),
+  ],
+  async (req, res) => {
+    try {
+      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+        return res.status(403).json({ message: 'You do not have permission to create streamers' });
+      }
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { email, password, firstName, lastName, age, gender } = req.body;
+      const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
+        ? password.trim()
+        : crypto.randomBytes(24).toString('hex');
+      const existingUser = await User.findOne({
+        where: { email: email.toLowerCase().trim() },
+      });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email address already registered' });
+      }
+      const user = await User.create({
+        email: email.toLowerCase().trim(),
+        password: passwordToSet,
+        userType: 'streamer',
+        isVerified: true,
+        isActive: true,
+      });
+      const profile = await Profile.create({
+        userId: user.id,
+        firstName: firstName.trim(),
+        lastName: (lastName && String(lastName).trim()) || '',
+        age: age != null ? parseInt(age, 10) : 18,
+        gender: gender || 'other',
+      });
+      res.status(201).json({
+        message: 'Streamer created successfully',
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+        },
+        profile: {
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          age: profile.age,
+        },
+      });
+    } catch (error) {
+      console.error('Error creating streamer:', error);
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }
@@ -475,6 +569,232 @@ router.put('/users/:id/toggle-verified', protect, superadmin, async (req, res) =
     });
   } catch (error) {
     console.error('Error toggling user verification:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/profiles/:userId/photo
+// @desc    Upload profile photo for a user (CRM create user flow)
+// @access  Admin only
+router.post(
+  '/profiles/:userId/photo',
+  protect,
+  admin,
+  profilePhotoUpload.single('photo'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: 'No file uploaded' });
+      }
+      const userId = req.params.userId;
+      if (!userId) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      const profile = await Profile.findOne({ where: { userId } });
+      if (!profile) {
+        return res.status(404).json({ message: 'Profile not found' });
+      }
+      const photoUrl = await uploadToSpaces(
+        req.file.buffer,
+        req.file.mimetype,
+        'profiles/photos',
+        req.file.originalname
+      );
+      const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+      if (photos.length > 0 && photos[0]?.url && photos[0].url.includes('digitaloceanspaces.com')) {
+        try {
+          await deleteFromSpaces(photos[0].url);
+        } catch (e) {
+          // continue
+        }
+      }
+      const newPhoto = {
+        url: photoUrl,
+        isPublic: true,
+        uploadedAt: new Date().toISOString(),
+      };
+      if (photos.length > 0) photos[0] = newPhoto;
+      else photos.push(newPhoto);
+      await profile.update({ photos });
+      res.json({ message: 'Photo uploaded successfully', photo: { url: photoUrl }, photos });
+    } catch (error) {
+      console.error('Admin profile photo upload error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   DELETE /api/admin/profiles/:userId/photo
+// @desc    Delete profile photo (first/main photo) for a user
+// @access  Admin only
+router.delete('/profiles/:userId/photo', protect, admin, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const profile = await Profile.findOne({ where: { userId } });
+    if (!profile) return res.status(404).json({ message: 'Profile not found' });
+    const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+    if (photos.length === 0) return res.json({ message: 'No photo to delete', photos: [] });
+    const first = photos[0];
+    if (first?.url && first.url.includes('digitaloceanspaces.com')) {
+      try { await deleteFromSpaces(first.url); } catch (e) { /* ignore */ }
+    }
+    const updated = photos.slice(1);
+    await profile.update({ photos: updated });
+    res.json({ message: 'Photo deleted', photos: updated });
+  } catch (error) {
+    console.error('Admin delete profile photo error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/profiles/:userId/online
+// @desc    Set profile online status (for CRM: show user as online/offline)
+// @access  Admin only
+router.put('/profiles/:userId/online', protect, admin, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { isOnline } = req.body;
+    const profile = await Profile.findOne({ where: { userId } });
+    if (!profile) return res.status(404).json({ message: 'Profile not found' });
+    const value = isOnline === true || isOnline === 'true';
+    await profile.update({
+      isOnline: value,
+      lastSeen: value ? new Date() : profile.lastSeen,
+    });
+    await profile.reload();
+    res.json({ message: 'Online status updated', isOnline: profile.isOnline, lastSeen: profile.lastSeen });
+  } catch (error) {
+    console.error('Admin set online error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/profiles/:userId
+// @desc    Update profile data (CRM edit streamer profile)
+// @access  Admin only
+router.put('/profiles/:userId', protect, admin, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { firstName, lastName, age, gender, bio, location } = req.body;
+    const profile = await Profile.findOne({ where: { userId } });
+    if (!profile) return res.status(404).json({ message: 'Profile not found' });
+    const updates = {};
+    if (firstName != null) updates.firstName = String(firstName).trim();
+    if (lastName != null) updates.lastName = String(lastName || '').trim();
+    if (age != null) updates.age = parseInt(age, 10) || 18;
+    if (gender != null && ['male', 'female', 'other'].includes(gender)) updates.gender = gender;
+    if (bio != null) updates.bio = String(bio).trim().slice(0, 1000);
+    if (location != null && typeof location === 'object') {
+      updates.location = {
+        ...(profile.location || {}),
+        city: location.city != null ? String(location.city).trim() : (profile.location?.city),
+        country: location.country != null ? String(location.country).trim() : (profile.location?.country),
+      };
+    }
+    await profile.update(updates);
+    await profile.reload();
+    res.json({ message: 'Profile updated', profile });
+  } catch (error) {
+    console.error('Admin update profile error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ============================================
+// Admin: View all conversations (monitor users & streamers)
+// ============================================
+
+// @route   GET /api/admin/conversations
+// @desc    List all chats/conversations. Admin can view and track everything.
+// @access  Admin only
+router.get('/conversations', protect, admin, async (req, res) => {
+  try {
+    const { type } = req.query; // optional: 'real', 'streamers', or omit for all
+    const chats = await Chat.findAll({
+      include: [
+        {
+          model: User,
+          as: 'user1Data',
+          attributes: ['id', 'email', 'userType'],
+          include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }],
+        },
+        {
+          model: User,
+          as: 'user2Data',
+          attributes: ['id', 'email', 'userType'],
+          include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }],
+        },
+      ],
+      order: [['lastMessageAt', 'DESC']],
+    });
+    let list = chats.map((c) => ({
+      id: c.id,
+      user1Id: c.user1Id,
+      user2Id: c.user2Id,
+      user1: c.user1Data ? { id: c.user1Data.id, email: c.user1Data.email, userType: c.user1Data.userType, profile: c.user1Data.profile } : null,
+      user2: c.user2Data ? { id: c.user2Data.id, email: c.user2Data.email, userType: c.user2Data.userType, profile: c.user2Data.profile } : null,
+      lastMessageAt: c.lastMessageAt,
+      lastMessage: c.lastMessage,
+      unreadCountUser1: c.unreadCountUser1,
+      unreadCountUser2: c.unreadCountUser2,
+    }));
+    if (type === 'real') {
+      list = list.filter((c) => (c.user1?.userType === 'regular') && (c.user2?.userType === 'regular'));
+    } else if (type === 'streamers') {
+      list = list.filter((c) =>
+        ['streamer', 'talent'].includes(c.user1?.userType) || ['streamer', 'talent'].includes(c.user2?.userType)
+      );
+    }
+    res.json({ conversations: list });
+  } catch (error) {
+    console.error('Admin conversations error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/conversations/:chatId/messages
+// @desc    Get full message history for a chat. Admin read-only watch.
+// @access  Admin only
+router.get('/conversations/:chatId/messages', protect, admin, async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        { model: User, as: 'user1Data', attributes: ['id', 'email', 'userType'], include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }] },
+        { model: User, as: 'user2Data', attributes: ['id', 'email', 'userType'], include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }] },
+      ],
+    });
+    if (!chat) return res.status(404).json({ message: 'Conversation not found' });
+    const messages = await Message.findAll({
+      where: { chatId, isDeleted: false },
+      include: [
+        { model: User, as: 'senderData', attributes: ['id', 'email', 'userType'], include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName'] }] },
+        { model: User, as: 'receiverData', attributes: ['id', 'email', 'userType'], include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName'] }] },
+      ],
+      // Use raw DB column name because Message model uses created_at
+      order: [['created_at', 'ASC']],
+    });
+    res.json({
+      chat: {
+        id: chat.id,
+        user1: chat.user1Data,
+        user2: chat.user2Data,
+      },
+      messages: messages.map((m) => ({
+        id: m.id,
+        sender: m.sender,
+        receiver: m.receiver,
+        senderData: m.senderData,
+        receiverData: m.receiverData,
+        content: m.content,
+        mediaUrl: m.mediaUrl,
+        messageType: m.messageType,
+        isRead: m.isRead,
+        createdAt: m.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error('Admin conversation messages error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
