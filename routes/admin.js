@@ -30,11 +30,48 @@ import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
+import { sendLoginLinkEmail } from '../utils/emailService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = express.Router();
+
+const sendCrmCreatedUserLoginLink = async (userId, email, firstName) => {
+  try {
+    const normalizedEmail = String(email || '').toLowerCase().trim();
+    if (!normalizedEmail) {
+      return { sent: false, error: 'Missing email' };
+    }
+
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    await User.update(
+      { loginLinkToken: hashedToken, loginLinkExpires: null },
+      { where: { id: userId } }
+    );
+
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+    const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
+    const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
+
+    if (!emailResult.success) {
+      if (process.env.NODE_ENV !== 'production' && emailResult.error === 'SMTP not configured') {
+        console.log('\n📧 [DEV][CRM] SMTP not configured — use this login link:');
+        console.log(loginUrl);
+        console.log('');
+        return { sent: false, error: emailResult.error, devLoginLink: loginUrl };
+      }
+      return { sent: false, error: emailResult.error || 'Email send failed' };
+    }
+
+    return { sent: true };
+  } catch (error) {
+    return { sent: false, error: error.message || 'Login email flow failed' };
+  }
+};
 
 // Multer for product/gift images: memory for Spaces, disk fallback
 const wishlistStorage = multer.memoryStorage();
@@ -385,6 +422,7 @@ router.post(
     body('firstName').trim().notEmpty(),
     body('age').isInt({ min: 18 }),
     body('gender').isIn(['male', 'female', 'other']),
+    body('seeking').optional().isIn(['male', 'female', 'both']),
   ],
   async (req, res) => {
     try {
@@ -398,7 +436,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, password, firstName, lastName, age, gender } = req.body;
+      const { email, password, firstName, lastName, age, gender, seeking, hometown, bio, interests, idealPartner } = req.body;
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
@@ -421,7 +459,12 @@ router.post(
         userType: 'regular',
         isVerified: true,
         isActive: true,
+        isAdminCreated: true,
+        registrationComplete: true,
       });
+
+      const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
+      const country = typeof hometown === 'string' ? (hometown.split(',')[1] || '').trim() : '';
 
       // Create profile
       const profile = await Profile.create({
@@ -430,10 +473,21 @@ router.post(
         lastName: lastName?.trim() || '',
         age: parseInt(age),
         gender: gender,
+        bio: typeof bio === 'string' ? bio : '',
+        interests: Array.isArray(interests) ? interests : [],
+        location: { city, country },
+        preferences: {
+          lookingFor: seeking || 'both',
+          description: typeof idealPartner === 'string' ? idealPartner : '',
+        },
       });
 
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+
       res.status(201).json({
-        message: 'User created successfully',
+        message: loginEmail.sent
+          ? 'User created successfully. Login email sent.'
+          : 'User created successfully, but login email could not be sent.',
         user: {
           id: user.id,
           email: user.email,
@@ -444,6 +498,9 @@ router.post(
           lastName: profile.lastName,
           age: profile.age,
         },
+        loginEmailSent: loginEmail.sent,
+        loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
       });
     } catch (error) {
       console.error('Error creating user:', error);
@@ -465,6 +522,7 @@ router.post(
     body('firstName').trim().notEmpty(),
     body('age').optional().isInt({ min: 18 }),
     body('gender').optional().isIn(['male', 'female', 'other']),
+    body('seeking').optional().isIn(['male', 'female', 'both']),
   ],
   async (req, res) => {
     try {
@@ -475,7 +533,7 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      const { email, password, firstName, lastName, age, gender } = req.body;
+      const { email, password, firstName, lastName, age, gender, seeking, hometown, bio, interests, idealPartner } = req.body;
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
@@ -491,16 +549,33 @@ router.post(
         userType: 'streamer',
         isVerified: true,
         isActive: true,
+        isAdminCreated: true,
+        registrationComplete: true,
       });
+
+      const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
+      const country = typeof hometown === 'string' ? (hometown.split(',')[1] || '').trim() : '';
       const profile = await Profile.create({
         userId: user.id,
         firstName: firstName.trim(),
         lastName: (lastName && String(lastName).trim()) || '',
         age: age != null ? parseInt(age, 10) : 18,
         gender: gender || 'other',
+        bio: typeof bio === 'string' ? bio : '',
+        interests: Array.isArray(interests) ? interests : [],
+        location: { city, country },
+        preferences: {
+          lookingFor: seeking || 'both',
+          description: typeof idealPartner === 'string' ? idealPartner : '',
+        },
       });
+
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+
       res.status(201).json({
-        message: 'Streamer created successfully',
+        message: loginEmail.sent
+          ? 'Streamer created successfully. Login email sent.'
+          : 'Streamer created successfully, but login email could not be sent.',
         user: {
           id: user.id,
           email: user.email,
@@ -511,6 +586,9 @@ router.post(
           lastName: profile.lastName,
           age: profile.age,
         },
+        loginEmailSent: loginEmail.sent,
+        loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
       });
     } catch (error) {
       console.error('Error creating streamer:', error);
