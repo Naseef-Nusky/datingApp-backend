@@ -6,6 +6,7 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { streamer, admin } from '../middleware/auth.js';
 import { detectLocation } from '../utils/locationDetector.js';
+import { sendProfileViewNotificationEmail } from '../utils/emailService.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
@@ -423,7 +424,7 @@ router.get('/me', protect, async (req, res) => {
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const profile = await Profile.findOne({ 
+    const profile = await Profile.findOne({
       where: { userId: req.params.id }
     });
 
@@ -439,6 +440,24 @@ router.get('/:id', protect, async (req, res) => {
     // Increment profile views
     profile.profileViews += 1;
     await profile.save();
+
+    // Send profile view notification email (no existing contact required)
+    try {
+      if (user && user.email && req.user.id !== profile.userId) {
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        const profileUrl = `${frontendUrl}/profile/${profile.userId}`;
+        const recipientName =
+          profile.firstName ||
+          user.email.split('@')[0] ||
+          'there';
+
+        sendProfileViewNotificationEmail(user.email, recipientName, profileUrl).catch((err) => {
+          console.error('Profile view email error:', err);
+        });
+      }
+    } catch (emailErr) {
+      console.error('Profile view email outer error:', emailErr);
+    }
 
     res.json({
       id: profile.id,

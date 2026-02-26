@@ -180,4 +180,178 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
   return await sendEmail(to, `Log in to ${appName}`, htmlContent);
 };
 
-export default { sendEmail, sendEmailNotification, sendLoginLinkEmail };
+/**
+ * Send notification when someone's profile is viewed.
+ * This does NOT require an existing contact – any profile view can trigger it.
+ * @param {string} to - Recipient email
+ * @param {string} recipientName - Display name for greeting
+ * @param {string} profileUrl - URL to open the recipient's profile/dashboard
+ */
+export const sendProfileViewNotificationEmail = async (to, recipientName, profileUrl) => {
+  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const logoUrl = EMAIL_LOGO_URL;
+
+  const safeName = recipientName || 'there';
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 18px rgba(0,0,0,0.08); }
+    .header { padding: 20px 24px 12px; border-bottom: 3px solid #E97672; }
+    .logo { max-width: 160px; height: auto; }
+    .content { padding: 22px 24px 28px; }
+    h1 { margin: 0 0 12px; font-size: 26px; color: #1f2933; }
+    p { margin: 0 0 12px; font-size: 15px; line-height: 1.6; }
+    .cta {
+      display: inline-block;
+      margin-top: 18px;
+      background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672);
+      color: #fff !important;
+      text-decoration: none;
+      padding: 12px 28px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 15px;
+    }
+    .footer { padding: 18px 24px 22px; font-size: 12px; color: #8a8a8a; background: #f9fafb; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+    </div>
+    <div class="content">
+      <h1>Someone just viewed your profile</h1>
+      <p>Hi ${safeName},</p>
+      <p>Your profile on ${appName} recently received a new visit. This is a great time to log in, update your details, or reach out to new matches.</p>
+      <p>Staying active helps you appear more often in searches and recommendations, so don&apos;t miss the chance to connect.</p>
+      <a class="cta" href="${profileUrl}">Open my profile</a>
+    </div>
+    <div class="footer">
+      <p>This automatic notification was sent because a member viewed your profile on ${appName}.</p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  return await sendEmail(
+    to,
+    'Your profile just got a new view',
+    htmlContent,
+    `Hi ${safeName}, someone just viewed your profile on ${appName}. Open your profile: ${profileUrl}`
+  );
+};
+
+/**
+ * Send "user came online" notification email to existing contacts.
+ * @param {string} to - Recipient email
+ * @param {string} recipientName - Recipient display name
+ * @param {Object} onlineUser - { id, firstName, photoUrl }
+ * @param {string} chatUrl - URL to open profile/chat
+ */
+export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineUser, chatUrl) => {
+  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const logoUrl = EMAIL_LOGO_URL;
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const onlineName = onlineUser?.firstName || 'Someone';
+  const photoUrl = onlineUser?.photoUrl || `${frontendUrl}/profile.png`;
+  const giftBannerUrl = process.env.EMAIL_GIFT_BANNER_URL || '';
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; background: #efefef; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #efefef; }
+    .header { padding: 22px 24px 10px; border-bottom: 1px solid #e55b6a; }
+    .logo { max-width: 120px; height: auto; }
+    .content { padding: 14px 24px 28px; }
+    h1 { margin: 22px 0 16px; color: #3d3d44; font-size: 56px; line-height: 1.12; letter-spacing: -0.02em; }
+    .online-card {
+      background: #fff;
+      border: 1px solid #d3d3d3;
+      border-radius: 16px;
+      overflow: hidden;
+      display: table;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+    .online-photo { display: table-cell; width: 42%; vertical-align: middle; background: #ddd; }
+    .online-photo img { width: 100%; height: 100%; display: block; object-fit: cover; min-height: 208px; }
+    .online-info { display: table-cell; width: 58%; vertical-align: middle; padding: 18px 22px; }
+    .name { margin: 0 0 6px; font-size: 38px; line-height: 1.08; color: #0056d6; font-weight: 500; }
+    .sub { margin: 0 0 14px; color: #31343b; font-size: 36px; line-height: 1.08; }
+    .cta {
+      display: inline-block;
+      background: #d91d36;
+      color: #fff !important;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 35px;
+      line-height: 1;
+      padding: 18px 44px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .gift-banner {
+      margin: 18px auto 0;
+      border-radius: 16px;
+      overflow: hidden;
+      display: block;
+      width: 92%;
+      max-width: 520px;
+    }
+    .gift-banner img { width: 100%; display: block; }
+    .footer { padding: 20px 24px 28px; color: #8a8a8a; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+    </div>
+    <div class="content">
+      <h1>${onlineName} is now online!</h1>
+      <div class="online-card">
+        <div class="online-photo">
+          <img src="${photoUrl}" alt="${onlineName}" />
+        </div>
+        <div class="online-info">
+          <p class="name">${onlineName}</p>
+          <p class="sub">recently went online</p>
+          <a class="cta" href="${chatUrl}">Chat Now</a>
+        </div>
+      </div>
+      ${giftBannerUrl ? `<div class="gift-banner"><img src="${giftBannerUrl}" alt="Share virtual gifts" /></div>` : ''}
+    </div>
+    <div class="footer">
+      Meet awesome people on ${appName}
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  return await sendEmail(
+    to,
+    `${onlineName} is now online`,
+    htmlContent,
+    `Hi ${recipientName || ''}, ${onlineName} is now online. Open chat: ${chatUrl}`
+  );
+};
+
+export default {
+  sendEmail,
+  sendEmailNotification,
+  sendLoginLinkEmail,
+  sendUserOnlineNotificationEmail,
+  sendProfileViewNotificationEmail,
+};

@@ -1,16 +1,90 @@
 import express from 'express';
 import { body, validationResult } from 'express-validator';
-import { User, Profile } from '../models/index.js';
+import { User, Profile, Chat, Message } from '../models/index.js';
 import { Op } from 'sequelize';
 import generateToken from '../utils/generateToken.js';
 import { protect } from '../middleware/auth.js';
 import { detectLocation, getClientIP } from '../utils/locationDetector.js';
-import { sendLoginLinkEmail } from '../utils/emailService.js';
+import { sendLoginLinkEmail, sendUserOnlineNotificationEmail } from '../utils/emailService.js';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 
 const router = express.Router();
+
+const getPrimaryPhotoUrl = (profile) => {
+  const first = Array.isArray(profile?.photos) ? profile.photos[0] : null;
+  if (!first) return null;
+  if (typeof first === 'string') return first;
+  if (typeof first === 'object' && first?.url) return first.url;
+  return null;
+};
+
+const getContactUserIdsForOnlineAlert = async (userId) => {
+  const ids = new Set();
+
+  const chats = await Chat.findAll({
+    where: { [Op.or]: [{ user1Id: userId }, { user2Id: userId }] },
+    attributes: ['user1Id', 'user2Id'],
+  });
+  chats.forEach((c) => {
+    if (c.user1Id && c.user1Id !== userId) ids.add(c.user1Id);
+    if (c.user2Id && c.user2Id !== userId) ids.add(c.user2Id);
+  });
+
+  const messagePeers = await Message.findAll({
+    where: { [Op.or]: [{ sender: userId }, { receiver: userId }] },
+    attributes: ['sender', 'receiver'],
+  });
+  messagePeers.forEach((m) => {
+    if (m.sender && m.sender !== userId) ids.add(m.sender);
+    if (m.receiver && m.receiver !== userId) ids.add(m.receiver);
+  });
+
+  return Array.from(ids);
+};
+
+const notifyContactsWhenUserComesOnline = async (onlineUser, onlineProfile) => {
+  try {
+    const contactIds = await getContactUserIdsForOnlineAlert(onlineUser.id);
+    if (!contactIds.length) return;
+
+    // Cap batch size to avoid bursts on large accounts.
+    const recipientIds = contactIds.slice(0, 50);
+    const recipients = await User.findAll({
+      where: {
+        id: { [Op.in]: recipientIds },
+        isActive: true,
+        userType: { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'] },
+      },
+      include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }],
+      attributes: ['id', 'email'],
+    });
+
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const onlineName =
+      onlineProfile?.firstName ||
+      onlineUser?.email?.split('@')[0] ||
+      'Someone';
+    const photoUrl = getPrimaryPhotoUrl(onlineProfile);
+    const chatUrl = `${frontendUrl}/profile/${onlineUser.id}`;
+
+    await Promise.allSettled(
+      recipients
+        .filter((r) => r.email && r.id !== onlineUser.id)
+        .map((recipient) =>
+          sendUserOnlineNotificationEmail(
+            recipient.email,
+            recipient.profile?.firstName || recipient.email.split('@')[0] || 'there',
+            { id: onlineUser.id, firstName: onlineName, photoUrl },
+            chatUrl
+          )
+        )
+    );
+  } catch (err) {
+    console.error('Online alert email error:', err);
+  }
+};
 
 // Email transporter setup (configure with your email service)
 const transporter = nodemailer.createTransport({
@@ -261,9 +335,13 @@ router.post(
       await user.save();
       const profile = await Profile.findOne({ where: { userId: user.id } });
       if (profile) {
+        const wasOnline = !!profile.isOnline;
         profile.isOnline = true;
         profile.lastSeen = new Date();
         await profile.save();
+        if (!wasOnline) {
+          notifyContactsWhenUserComesOnline(user, profile);
+        }
       }
       const token = generateToken(user.id, user.userType);
       res.json({
@@ -320,9 +398,13 @@ router.post(
       // Update profile online status
       const profile = await Profile.findOne({ where: { userId: user.id } });
       if (profile) {
+        const wasOnline = !!profile.isOnline;
         profile.isOnline = true;
         profile.lastSeen = new Date();
         await profile.save();
+        if (!wasOnline) {
+          notifyContactsWhenUserComesOnline(user, profile);
+        }
       }
 
       const token = generateToken(user.id, user.userType);
@@ -624,9 +706,13 @@ router.post(
 
       const profile = await Profile.findOne({ where: { userId: user.id } });
       if (profile) {
+        const wasOnline = !!profile.isOnline;
         profile.isOnline = true;
         profile.lastSeen = new Date();
         await profile.save();
+        if (!wasOnline) {
+          notifyContactsWhenUserComesOnline(user, profile);
+        }
       }
 
       const token = generateToken(user.id, user.userType);
