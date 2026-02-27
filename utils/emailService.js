@@ -249,6 +249,166 @@ export const sendProfileViewNotificationEmail = async (to, recipientName, profil
 };
 
 /**
+ * Send "See Who Viewed Your Profile!" email when 4 new profiles have viewed.
+ * @param {string} to - Recipient email
+ * @param {string} recipientName - Display name for greeting (e.g. "tinki")
+ * @param {Array<{ id: string, name: string, age?: number, photoUrl?: string, profileUrl: string }>} viewers - Up to 4 viewers
+ */
+export const sendProfileViewsBatchEmail = async (to, recipientName, viewers) => {
+  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const logoUrl = EMAIL_LOGO_URL;
+  const safeName = recipientName || 'there';
+  const list = (viewers || []).slice(0, 4);
+
+  const profileCards = list
+    .map(
+      (v) => `
+    <div class="profile-card">
+      <div class="profile-photo">
+        <img src="${v.photoUrl || ''}" alt="${v.name || 'Profile'}" />
+      </div>
+      <p class="profile-name">${v.name || 'Someone'}${v.age != null ? `, ${v.age}` : ''}</p>
+      <a class="profile-cta" href="${v.profileUrl || '#'}">View profile</a>
+    </div>`
+    )
+    .join('');
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #fff; }
+    .header { padding: 20px 24px 14px; border-bottom: 2px solid #e55b6a; }
+    .logo { max-width: 140px; height: auto; display: block; }
+    .content { padding: 24px 24px 28px; }
+    h1 { margin: 0 0 16px; color: #1a1a1a; font-size: 26px; line-height: 1.2; font-weight: bold; }
+    .greet { margin: 0 0 12px; font-size: 15px; }
+    .intro { margin: 0 0 20px; font-size: 14px; line-height: 1.6; color: #444; }
+    .profiles { display: table; width: 100%; border-collapse: separate; border-spacing: 12px 0; }
+    .profile-card { display: table-cell; width: 25%; vertical-align: top; text-align: center; }
+    .profile-photo { width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 8px; background: #e8e8e8; margin-bottom: 10px; }
+    .profile-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .profile-name { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: #333; }
+    .profile-cta {
+      display: inline-block;
+      background: #d91d36;
+      color: #fff !important;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 6px;
+    }
+    .footer { padding: 16px 24px; background: #ebebeb; color: #777; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+    </div>
+    <div class="content">
+      <h1>See Who Viewed Your Profile!</h1>
+      <p class="greet">Hi ${safeName}!</p>
+      <p class="intro">
+        See who recently viewed your profile on ${appName}. Get in touch and see if they&apos;re interested now they&apos;ve seen your photos and read your details. Take the lead and ask them to chat!
+      </p>
+      <div class="profiles">${profileCards}</div>
+    </div>
+    <div class="footer">
+      This notification was sent because members viewed your profile on ${appName}.
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  return await sendEmail(
+    to,
+    'See Who Viewed Your Profile!',
+    htmlContent,
+    `Hi ${safeName}, ${list.length} people recently viewed your profile on ${appName}. View their profiles in the email.`
+  );
+};
+
+/**
+ * Send "X has added you to favorites/contacts" email when someone adds the recipient to contacts.
+ * @param {string} to - Recipient email
+ * @param {string} recipientName - Recipient display name
+ * @param {Object} adder - { id, name, age?, photoUrl, profileUrl }
+ */
+export const sendAddedToContactsEmail = async (to, recipientName, adder) => {
+  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const logoUrl = EMAIL_LOGO_URL;
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const adderName = adder?.name || 'Someone';
+  const photoUrl = adder?.photoUrl || `${frontendUrl}/profile.png`;
+  const profileUrl = adder?.profileUrl || `${frontendUrl}/profile/${adder?.id || ''}`;
+  const ageStr = adder?.age != null ? `, ${adder.age}` : '';
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #fff; }
+    .header { padding: 16px 24px; border-bottom: 2px solid #e55b6a; display: flex; align-items: center; justify-content: space-between; }
+    .logo { max-width: 120px; height: auto; }
+    .unsub { font-size: 12px; color: #666; }
+    .content { padding: 24px 24px 28px; }
+    .headline { margin: 0 0 8px; font-size: 24px; font-weight: bold; color: #2c2c2c; }
+    .headline .highlight { color: #d91d36; }
+    .subline { margin: 0 0 20px; font-size: 15px; color: #555; }
+    .profile-card { border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; max-width: 280px; margin: 0 auto; }
+    .profile-photo { width: 100%; aspect-ratio: 1; overflow: hidden; background: #e8e8e8; }
+    .profile-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .profile-info { padding: 16px; text-align: center; }
+    .profile-name { margin: 0 0 12px; font-size: 18px; font-weight: bold; color: #333; }
+    .profile-cta { display: inline-block; background: #d91d36; color: #fff !important; text-decoration: none; font-weight: 600; font-size: 14px; padding: 10px 24px; border-radius: 6px; }
+    .footer { padding: 14px 24px; background: #f0f0f0; color: #777; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+      <span class="unsub">Unsubscribe here.</span>
+    </div>
+    <div class="content">
+      <p class="headline">${adderName} has <span class="highlight">added you to favorites.</span></p>
+      <p class="subline">Take the lead and chat first!</p>
+      <div class="profile-card">
+        <div class="profile-photo">
+          <img src="${photoUrl}" alt="${adderName}" />
+        </div>
+        <div class="profile-info">
+          <p class="profile-name">${adderName}${ageStr}</p>
+          <a class="profile-cta" href="${profileUrl}">View profile</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer">
+      This notification was sent because someone added you to their contacts on ${appName}.
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  return await sendEmail(
+    to,
+    `${adderName} has added you to favorites. 💕`,
+    htmlContent,
+    `Hi ${recipientName || ''}, ${adderName} has added you to favorites. View profile: ${profileUrl}`
+  );
+};
+
+/**
  * Send "user came online" notification email to existing contacts.
  * @param {string} to - Recipient email
  * @param {string} recipientName - Recipient display name
@@ -269,52 +429,50 @@ export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineU
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: Arial, sans-serif; background: #efefef; margin: 0; padding: 0; color: #333; }
-    .container { max-width: 600px; margin: 0 auto; background: #efefef; }
-    .header { padding: 22px 24px 10px; border-bottom: 1px solid #e55b6a; }
-    .logo { max-width: 120px; height: auto; }
-    .content { padding: 14px 24px 28px; }
-    h1 { margin: 22px 0 16px; color: #3d3d44; font-size: 56px; line-height: 1.12; letter-spacing: -0.02em; }
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #f5f5f5; }
+    .top-bar { height: 6px; background: #c5e0f0; }
+    .header { padding: 20px 24px 14px; background: #fff; border-bottom: 3px solid #e55b6a; }
+    .logo { max-width: 140px; height: auto; display: block; }
+    .content { padding: 24px 24px 28px; background: #fff; }
+    h1 { margin: 0 0 20px; color: #2c2c2c; font-size: 28px; line-height: 1.2; font-weight: bold; }
     .online-card {
       background: #fff;
-      border: 1px solid #d3d3d3;
-      border-radius: 16px;
+      border: 1px solid #d8d8d8;
+      border-radius: 12px;
       overflow: hidden;
       display: table;
       width: 100%;
       margin-bottom: 20px;
     }
-    .online-photo { display: table-cell; width: 42%; vertical-align: middle; background: #ddd; }
-    .online-photo img { width: 100%; height: 100%; display: block; object-fit: cover; min-height: 208px; }
-    .online-info { display: table-cell; width: 58%; vertical-align: middle; padding: 18px 22px; }
-    .name { margin: 0 0 6px; font-size: 38px; line-height: 1.08; color: #0056d6; font-weight: 500; }
-    .sub { margin: 0 0 14px; color: #31343b; font-size: 36px; line-height: 1.08; }
+    .online-photo { display: table-cell; width: 40%; vertical-align: middle; background: #e8e8e8; }
+    .online-photo img { width: 100%; height: 100%; display: block; object-fit: cover; min-height: 180px; }
+    .online-info { display: table-cell; width: 60%; vertical-align: middle; padding: 20px 24px; }
+    .name { margin: 0 0 8px; font-size: 22px; line-height: 1.2; color: #0056d6; font-weight: 600; }
+    .sub { margin: 0 0 16px; color: #333; font-size: 14px; line-height: 1.3; }
     .cta {
       display: inline-block;
       background: #d91d36;
       color: #fff !important;
       text-decoration: none;
       font-weight: 700;
-      font-size: 35px;
+      font-size: 16px;
       line-height: 1;
-      padding: 18px 44px;
+      padding: 12px 28px;
       border-radius: 6px;
       white-space: nowrap;
     }
-    .gift-banner {
-      margin: 18px auto 0;
-      border-radius: 16px;
-      overflow: hidden;
-      display: block;
-      width: 92%;
-      max-width: 520px;
-    }
+    .meet { margin: 0 0 4px; color: #666; font-size: 14px; }
+    .meet strong { color: #333; }
+    .gift-banner { margin: 18px auto 0; border-radius: 12px; overflow: hidden; display: block; width: 92%; max-width: 520px; }
     .gift-banner img { width: 100%; display: block; }
-    .footer { padding: 20px 24px 28px; color: #8a8a8a; font-size: 13px; }
+    .footer { padding: 18px 24px 24px; background: #ebebeb; color: #777; font-size: 12px; }
+    .footer a { color: #0056d6; text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="container">
+    <div class="top-bar"></div>
     <div class="header">
       <img src="${logoUrl}" alt="${appName}" class="logo" />
     </div>
@@ -330,10 +488,11 @@ export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineU
           <a class="cta" href="${chatUrl}">Chat Now</a>
         </div>
       </div>
+      <p class="meet">Meet awesome people <strong>on ${appName}</strong></p>
       ${giftBannerUrl ? `<div class="gift-banner"><img src="${giftBannerUrl}" alt="Share virtual gifts" /></div>` : ''}
     </div>
     <div class="footer">
-      Meet awesome people on ${appName}
+      If you would like to hear about bonuses, discounts and special offers from ${appName}, please add this address to your contacts list.
     </div>
   </div>
 </body>
@@ -354,4 +513,6 @@ export default {
   sendLoginLinkEmail,
   sendUserOnlineNotificationEmail,
   sendProfileViewNotificationEmail,
+  sendProfileViewsBatchEmail,
+  sendAddedToContactsEmail,
 };

@@ -1,6 +1,7 @@
 import express from 'express';
 import { body, validationResult } from 'express-validator';
 import { User, Profile, Chat, Message } from '../models/index.js';
+import CallRequest from '../models/CallRequest.js';
 import { Op } from 'sequelize';
 import generateToken from '../utils/generateToken.js';
 import { protect } from '../middleware/auth.js';
@@ -39,6 +40,16 @@ const getContactUserIdsForOnlineAlert = async (userId) => {
   messagePeers.forEach((m) => {
     if (m.sender && m.sender !== userId) ids.add(m.sender);
     if (m.receiver && m.receiver !== userId) ids.add(m.receiver);
+  });
+
+  // Include users who have had a call (or missed call) with this user
+  const callRequests = await CallRequest.findAll({
+    where: { [Op.or]: [{ callerId: userId }, { receiverId: userId }] },
+    attributes: ['callerId', 'receiverId'],
+  });
+  callRequests.forEach((c) => {
+    if (c.callerId && c.callerId !== userId) ids.add(c.callerId);
+    if (c.receiverId && c.receiverId !== userId) ids.add(c.receiverId);
   });
 
   return Array.from(ids);

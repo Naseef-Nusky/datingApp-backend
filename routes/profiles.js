@@ -6,12 +6,27 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { streamer, admin } from '../middleware/auth.js';
 import { detectLocation } from '../utils/locationDetector.js';
-import { sendProfileViewNotificationEmail } from '../utils/emailService.js';
+import { sendProfileViewsBatchEmail } from '../utils/emailService.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 
 const router = express.Router();
+
+// Pending profile viewers per profile owner: ownerId -> [ viewerId, ... ] (unique).
+// When length >= 4, send "See Who Viewed Your Profile!" email with those 4, then remove them.
+const pendingProfileViewers = new Map();
+
+// Single-view email: send once per viewer->profile pair, with who viewed (one card).
+const profileViewEmailCache = new Map();
+
+function getViewerPhotoUrl(profile) {
+  if (!profile?.photos || !Array.isArray(profile.photos) || profile.photos.length === 0) return null;
+  const first = profile.photos[0];
+  if (typeof first === 'string') return first;
+  if (typeof first === 'object' && first?.url) return first.url;
+  return null;
+}
 
 // Configure multer for memory storage (we'll upload directly to Spaces)
 const storage = multer.memoryStorage();
@@ -441,22 +456,72 @@ router.get('/:id', protect, async (req, res) => {
     profile.profileViews += 1;
     await profile.save();
 
-    // Send profile view notification email (no existing contact required)
+    // Profile view emails: (1) single-view with who viewed (once per viewer), (2) batch when 4 viewers.
     try {
       if (user && user.email && req.user.id !== profile.userId) {
+        const ownerId = profile.userId;
+        const viewerId = req.user.id;
         const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        const profileUrl = `${frontendUrl}/profile/${profile.userId}`;
         const recipientName =
-          profile.firstName ||
-          user.email.split('@')[0] ||
-          'there';
+          profile.firstName || user.email.split('@')[0] || 'there';
 
-        sendProfileViewNotificationEmail(user.email, recipientName, profileUrl).catch((err) => {
-          console.error('Profile view email error:', err);
-        });
+        // Single-view: send "See who viewed your profile" with this viewer's card (once per viewer->profile).
+        const cacheKey = `${ownerId}:${viewerId}`;
+        if (!profileViewEmailCache.has(cacheKey)) {
+          profileViewEmailCache.set(cacheKey, true);
+          const viewerProfile = await Profile.findOne({
+            where: { userId: viewerId },
+            attributes: ['userId', 'firstName', 'age', 'photos'],
+          });
+          const viewerInfo = {
+            id: viewerId,
+            name: viewerProfile?.firstName || 'Someone',
+            age: viewerProfile?.age ?? null,
+            photoUrl: getViewerPhotoUrl(viewerProfile) || `${frontendUrl}/profile.png`,
+            profileUrl: `${frontendUrl}/profile/${viewerId}`,
+          };
+          sendProfileViewsBatchEmail(user.email, recipientName, [viewerInfo]).catch((err) => {
+            console.error('Profile view (single) email error:', err);
+          });
+        }
+
+        // Batch: when 4 new distinct viewers, send email with 4 cards.
+        let list = pendingProfileViewers.get(ownerId) || [];
+        if (!list.includes(viewerId)) {
+          list = [...list, viewerId];
+          pendingProfileViewers.set(ownerId, list);
+        }
+
+        if (list.length >= 4) {
+          const viewerIds = list.slice(0, 4);
+          pendingProfileViewers.set(ownerId, list.slice(4));
+
+          const viewerProfiles = await Profile.findAll({
+            where: { userId: { [Op.in]: viewerIds } },
+            attributes: ['userId', 'firstName', 'age', 'photos'],
+          });
+          const viewerMap = new Map(viewerProfiles.map((p) => [p.userId, p]));
+
+          const viewers = viewerIds.map((vid) => {
+            const p = viewerMap.get(vid);
+            const name = p?.firstName || 'Someone';
+            const photoUrl = getViewerPhotoUrl(p) || `${frontendUrl}/profile.png`;
+            return {
+              id: vid,
+              name,
+              age: p?.age ?? null,
+              photoUrl,
+              profileUrl: `${frontendUrl}/profile/${vid}`,
+            };
+          });
+
+          sendProfileViewsBatchEmail(user.email, recipientName, viewers).catch((err) => {
+            console.error('Profile views batch email error:', err);
+          });
+        }
       }
     } catch (emailErr) {
-      console.error('Profile view email outer error:', emailErr);
+      console.error('Profile view email error:', emailErr);
     }
 
     res.json({

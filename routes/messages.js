@@ -13,7 +13,7 @@ import Block from '../models/Block.js';
 import { protect } from '../middleware/auth.js';
 import multer from 'multer';
 import { uploadToSpaces } from '../utils/spacesUpload.js';
-import { sendEmail as sendSmtpEmail } from '../utils/emailService.js';
+import { sendEmail as sendSmtpEmail, sendAddedToContactsEmail } from '../utils/emailService.js';
 import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings } from '../utils/creditSettings.js';
@@ -146,10 +146,17 @@ router.post('/', protect, async (req, res) => {
     // IMPORTANT: Streamers/talents should NOT be charged credits – only real users pay.
     let creditsUsed = 0;
 
-    // Charge credits only for interactive chat messages (not emails, intros, gifts, etc.)
+    const contentTrimmedForCharge = typeof content === 'string' ? content.trim() : '';
+    const isAddToContactMessage =
+      contentTrimmedForCharge === 'Added you to my contacts.' ||
+      contentTrimmedForCharge === 'Added you to my contacts' ||
+      contentTrimmedForCharge.toLowerCase().includes('added you to my contacts');
+
+    // Charge credits only for interactive chat messages (not emails, intros, gifts, add-to-contact, etc.)
     const nonChargeableTypes = ['email', 'intro', 'gift'];
     const effectiveType = messageType === 'chat' ? 'text' : messageType;
-    const isChargeableChat = !nonChargeableTypes.includes(effectiveType);
+    const isChargeableChat =
+      !nonChargeableTypes.includes(effectiveType) && !isAddToContactMessage;
     const isStreamerSender = req.user.userType === 'streamer' || req.user.userType === 'talent';
 
     if (isChargeableChat && !isStreamerSender) {
@@ -196,6 +203,40 @@ router.post('/', protect, async (req, res) => {
 
     const message = await Message.create(messageData);
     console.log(`✅ Message created with ID: ${message.id}, sender: ${message.sender}, receiver: ${message.receiver}`);
+
+    // When user "adds to contact" (star on profile), send "X has added you to favorites" email to the receiver
+    if (isAddToContactMessage) {
+      try {
+        const [senderProfile, receiverUser] = await Promise.all([
+          Profile.findOne({ where: { userId: req.user.id }, attributes: ['firstName', 'age', 'photos'] }),
+          User.findByPk(receiverId, { attributes: ['id', 'email'], include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }] }),
+        ]);
+        if (!receiverUser) {
+          console.warn('Add to contacts email: receiver user not found for id', receiverId);
+        } else if (!receiverUser.email) {
+          console.warn('Add to contacts email: receiver has no email', receiverId);
+        } else {
+          const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+          const firstPhoto = senderProfile?.photos && Array.isArray(senderProfile.photos) && senderProfile.photos[0];
+          const photoUrl =
+            (typeof firstPhoto === 'string' ? firstPhoto : firstPhoto?.url) || `${frontendUrl}/profile.png`;
+          console.log('Sending add-to-contacts email to', receiverUser.email);
+          sendAddedToContactsEmail(
+            receiverUser.email,
+            receiverUser.profile?.firstName || receiverUser.email.split('@')[0] || 'there',
+            {
+              id: req.user.id,
+              name: senderProfile?.firstName || 'Someone',
+              age: senderProfile?.age ?? null,
+              photoUrl,
+              profileUrl: `${frontendUrl}/profile/${req.user.id}`,
+            }
+          ).catch((err) => console.error('Added to contacts email error:', err));
+        }
+      } catch (addToContactEmailErr) {
+        console.error('Added to contacts email setup error:', addToContactEmailErr);
+      }
+    }
 
     // Record credit transaction if any credits were used
     if (creditsUsed > 0) {
