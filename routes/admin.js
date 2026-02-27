@@ -944,6 +944,11 @@ router.get('/conversations', protect, admin, async (req, res) => {
         ['streamer', 'talent'].includes(c.user1?.userType) || ['streamer', 'talent'].includes(c.user2?.userType)
       );
     }
+
+    // Hide conversations where either side is superadmin (internal/system use only)
+    list = list.filter(
+      (c) => c.user1?.userType !== 'superadmin' && c.user2?.userType !== 'superadmin'
+    );
     res.json({ conversations: list });
   } catch (error) {
     console.error('Admin conversations error:', error);
@@ -964,7 +969,7 @@ router.get('/conversations/:chatId/messages', protect, admin, async (req, res) =
       ],
     });
     if (!chat) return res.status(404).json({ message: 'Conversation not found' });
-    const messages = await Message.findAll({
+    let messages = await Message.findAll({
       where: { chatId, isDeleted: false },
       include: [
         { model: User, as: 'senderData', attributes: ['id', 'email', 'userType'], include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName'] }] },
@@ -972,6 +977,16 @@ router.get('/conversations/:chatId/messages', protect, admin, async (req, res) =
       ],
       // Use raw DB column name because Message model uses created_at
       order: [['created_at', 'ASC']],
+    });
+
+    // Hide system add/remove-contact messages from CRM conversation view
+    messages = messages.filter((m) => {
+      const raw = (m.content || '').toLowerCase().trim();
+      if (!raw) return true;
+      if (raw.includes('added you to my contacts') || raw.includes('removed you from my contacts')) {
+        return false;
+      }
+      return true;
     });
     res.json({
       chat: {

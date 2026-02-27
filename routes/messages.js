@@ -151,12 +151,18 @@ router.post('/', protect, async (req, res) => {
       contentTrimmedForCharge === 'Added you to my contacts.' ||
       contentTrimmedForCharge === 'Added you to my contacts' ||
       contentTrimmedForCharge.toLowerCase().includes('added you to my contacts');
+    const isRemoveFromContactMessage =
+      contentTrimmedForCharge === 'Removed you from my contacts.' ||
+      contentTrimmedForCharge === 'Removed you from my contacts' ||
+      contentTrimmedForCharge.toLowerCase().includes('removed you from my contacts');
 
-    // Charge credits only for interactive chat messages (not emails, intros, gifts, add-to-contact, etc.)
+    // Charge credits only for interactive chat messages (not emails, intros, gifts, add/remove-contact, etc.)
     const nonChargeableTypes = ['email', 'intro', 'gift'];
     const effectiveType = messageType === 'chat' ? 'text' : messageType;
     const isChargeableChat =
-      !nonChargeableTypes.includes(effectiveType) && !isAddToContactMessage;
+      !nonChargeableTypes.includes(effectiveType) &&
+      !isAddToContactMessage &&
+      !isRemoveFromContactMessage;
     const isStreamerSender = req.user.userType === 'streamer' || req.user.userType === 'talent';
 
     if (isChargeableChat && !isStreamerSender) {
@@ -426,7 +432,7 @@ router.get('/', protect, async (req, res) => {
       console.log(`🔍 Loading messages between ${req.user.id} and ${userId} (no chatId)`);
     }
 
-    const messages = await Message.findAll({
+    let messages = await Message.findAll({
       where: whereClause,
       include: [
         {
@@ -441,6 +447,16 @@ router.get('/', protect, async (req, res) => {
         },
       ],
       order: [['created_at', 'ASC']], // Use snake_case to match database column
+    });
+
+    // Hide system add/remove-contact messages from chat consumers
+    messages = messages.filter((msg) => {
+      const raw = (msg.content || msg.message_text || '').toLowerCase().trim();
+      if (!raw) return true;
+      if (raw.includes('added you to my contacts') || raw.includes('removed you from my contacts')) {
+        return false;
+      }
+      return true;
     });
 
     console.log(`📨 Found ${messages.length} messages in database`);
