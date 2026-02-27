@@ -72,6 +72,7 @@ router.put('/', protect, async (req, res) => {
       concierge,
       emailNotifications,
       manageAccountOption,
+      newPassword,
     } = req.body || {};
 
     // Update email (if changed)
@@ -89,6 +90,16 @@ router.put('/', protect, async (req, res) => {
           .json({ message: 'Email address already registered', field: 'email' });
       }
       user.email = normalizedEmail;
+    }
+
+    // Change password (optional)
+    if (newPassword) {
+      if (typeof newPassword !== 'string' || newPassword.length < 6) {
+        return res
+          .status(400)
+          .json({ message: 'Password must be at least 6 characters', field: 'newPassword' });
+      }
+      user.password = newPassword;
     }
 
     // Merge settings JSON
