@@ -499,7 +499,7 @@ export const getOnlineNotificationTemplate = (onlineUserData) => {
     </div>
     <div class="footer">
       <p style="margin: 0;">Meet awesome people</p>
-      <p style="margin: 4px 0 0 0;"><strong>on Dating.com</strong></p>
+      <p style="margin: 4px 0 0 0;"><strong>on Vantage Dating</strong></p>
     </div>
   </div>
 </body>
