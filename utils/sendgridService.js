@@ -438,7 +438,7 @@ export const getDailyDigestTemplate = (userName, stats) => {
 };
 
 /**
- * "X is now online!" notification email (like dating.com – profile card, Chat Now, virtual gifts banner)
+ * "X is now online!" notification email (like Vantage Dating – profile card, Chat Now, virtual gifts banner)
  */
 export const getOnlineNotificationTemplate = (onlineUserData) => {
   const name = onlineUserData.profile?.firstName

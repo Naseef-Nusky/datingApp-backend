@@ -84,6 +84,7 @@ const wishlistUpload = multer({
   },
 });
 const giftImageUpload = wishlistUpload; // same config, folder set in saveGiftImage
+const refillPackImageUpload = wishlistUpload; // same config, folder set in saveRefillPackImage
 
 // Multer for admin profile photo upload (memory for Spaces)
 const profilePhotoUpload = multer({
@@ -1269,6 +1270,56 @@ async function saveCategoryImage(req, file) {
 }
 
 // ============================================
+// Refill pack images (for CRM refill popup)
+// ============================================
+
+// @route   POST /api/admin/refill-pack-image
+// @desc    Upload image for a refill pack and return public URL
+// @access  Admin only
+router.post(
+  '/refill-pack-image',
+  protect,
+  admin,
+  refillPackImageUpload.single('image'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: 'No file uploaded' });
+      }
+      const url = await saveRefillPackImage(req, req.file);
+      if (!url) {
+        return res.status(500).json({ message: 'Failed to save image' });
+      }
+      res.json({ url });
+    } catch (error) {
+      console.error('Refill pack image upload error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+/** Save refill pack image to Spaces (folder: refill-packs/) or local uploads/refill-packs */
+async function saveRefillPackImage(req, file) {
+  if (!file || !file.buffer) return null;
+  const spacesConfigured = !!(
+    process.env.DO_SPACES_ENDPOINT &&
+    process.env.DO_SPACES_KEY &&
+    process.env.DO_SPACES_SECRET &&
+    process.env.DO_SPACES_NAME
+  );
+  if (spacesConfigured) {
+    return await uploadToSpaces(file.buffer, file.mimetype, 'refill-packs', file.originalname || '');
+  }
+  const ext = (file.originalname || '').split('.').pop() || 'jpg';
+  const filename = `${uuidv4()}.${ext}`;
+  const dir = path.join(__dirname, '..', 'uploads', 'refill-packs');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, filename), file.buffer);
+  const base = req.protocol + '://' + req.get('host');
+  return `${base}/uploads/refill-packs/${filename}`;
+}
+
+// ============================================
 // Virtual Gifts (Gift Catalog) – admin CRUD
 // ============================================
 
@@ -1812,6 +1863,16 @@ router.put(
       if (req.body.vipCreditsRequired != null) {
         partial.vipCreditsRequired = Math.max(1, parseInt(req.body.vipCreditsRequired, 10) || 160);
       }
+      // Subscription modal (Upgrade modal) – editable from CRM
+      if (req.body.subscriptionModalTitle != null) partial.subscriptionModalTitle = String(req.body.subscriptionModalTitle);
+      if (req.body.subscriptionStep1Title != null) partial.subscriptionStep1Title = String(req.body.subscriptionStep1Title);
+      if (req.body.subscriptionStep2Title != null) partial.subscriptionStep2Title = String(req.body.subscriptionStep2Title);
+      if (Array.isArray(req.body.subscriptionPacks)) partial.subscriptionPacks = req.body.subscriptionPacks;
+      if (Array.isArray(req.body.subscriptionBonuses)) partial.subscriptionBonuses = req.body.subscriptionBonuses;
+      if (req.body.subscriptionCostLinkText != null) partial.subscriptionCostLinkText = String(req.body.subscriptionCostLinkText);
+      if (req.body.subscriptionDisclaimer != null) partial.subscriptionDisclaimer = String(req.body.subscriptionDisclaimer);
+      // Refill credit packs (refill popup)
+      if (Array.isArray(req.body.refillPacks)) partial.refillPacks = req.body.refillPacks;
 
       const settings = await updateCreditSettings(partial);
       res.json({ settings });

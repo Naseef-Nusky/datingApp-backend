@@ -27,7 +27,7 @@ import matchRoutes from './routes/matches.js';
 import messageRoutes from './routes/messages.js';
 import storyRoutes from './routes/stories.js';
 import giftRoutes from './routes/gifts.js';
-import creditRoutes from './routes/credits.js';
+import creditRoutes, { handleStripeWebhook } from './routes/credits.js';
 import notificationRoutes from './routes/notifications.js';
 import safetyRoutes from './routes/safety.js';
 import streamerRoutes from './routes/streamer.js';
@@ -40,11 +40,22 @@ import vipRoutes from './routes/vip.js';
 
 dotenv.config();
 
+// Allowed origins for CORS (production: set CORS_ORIGINS or FRONTEND_URL + CRM_URL)
+const getAllowedOrigins = () => {
+  if (process.env.CORS_ORIGINS) {
+    return process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  }
+  const origins = [process.env.FRONTEND_URL || 'http://localhost:3000'];
+  if (process.env.CRM_URL) origins.push(process.env.CRM_URL.trim());
+  return origins;
+};
+const allowedOrigins = getAllowedOrigins();
+
 const app = express();
 const httpServer = createServer(app);
 const io = new SocketServer(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -62,7 +73,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+
+// Stripe webhook needs raw body for signature verification (must be before express.json)
+app.use('/api/credits/stripe-webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

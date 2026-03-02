@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { Op } from 'sequelize';
 import { sequelize } from '../config/database.js';
 import '../models/index.js';
 import { User, Profile } from '../models/index.js';
@@ -20,8 +21,8 @@ const createAdmin = async () => {
     // Check if admin already exists
     const existingAdmin = await User.findOne({ 
       where: { 
-        email: adminEmail,
-        userType: ['admin', 'superadmin']
+        email: adminEmail.toLowerCase().trim(),
+        userType: { [Op.in]: ['admin', 'superadmin'] },
       } 
     });
 
@@ -35,7 +36,7 @@ const createAdmin = async () => {
 
     // Create admin user
     const admin = await User.create({
-      email: adminEmail,
+      email: adminEmail.toLowerCase().trim(),
       password: adminPassword, // Will be hashed automatically by User model hooks
       userType: 'superadmin',
       isVerified: true,

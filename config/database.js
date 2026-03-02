@@ -1,24 +1,50 @@
 import { Sequelize } from 'sequelize';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const dbConfig = {
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
+  dialect: 'postgres',
+  logging: process.env.NODE_ENV === 'development' ? console.log : false,
+  pool: {
+    max: 10,
+    min: 0,
+    acquire: 30000,
+    idle: 10000,
+  },
+};
+
+// SSL for hosted DB (e.g. Digital Ocean Managed PostgreSQL)
+if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
+  dbConfig.dialectOptions = {
+    ssl: {
+      require: true,
+      rejectUnauthorized: true,
+    },
+  };
+  // Optional: path to CA certificate (e.g. DO's ca-certificate.crt)
+  if (process.env.DB_SSL_CA) {
+    const caPath = path.isAbsolute(process.env.DB_SSL_CA)
+      ? process.env.DB_SSL_CA
+      : path.resolve(process.cwd(), process.env.DB_SSL_CA);
+    if (fs.existsSync(caPath)) {
+      dbConfig.dialectOptions.ssl.ca = fs.readFileSync(caPath).toString();
+    }
+  }
+}
 
 const sequelize = new Sequelize(
   process.env.DB_NAME || 'datingapp',
   process.env.DB_USER || 'postgres',
   process.env.DB_PASSWORD || '',
-  {
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    dialect: 'postgres',
-    logging: process.env.NODE_ENV === 'development' ? console.log : false,
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-  }
+  dbConfig
 );
 
 const connectDB = async () => {

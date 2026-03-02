@@ -7,10 +7,13 @@ const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT) || 587,
-  secure: false, // true for 465, false for other ports
+  secure: process.env.SMTP_PORT === '465', // true for 465, false for 587 (STARTTLS)
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false, // avoid TLS cert errors with some SMTP providers
   },
 });
 
