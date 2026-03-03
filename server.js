@@ -68,6 +68,7 @@ const io = new SocketServer(httpServer, {
 });
 
 const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -728,8 +729,8 @@ const startServer = async () => {
     }
 
     // Start server
-    httpServer.listen(PORT, () => {
-      console.log(`🚀 Server is running on http://localhost:${PORT}`);
+    httpServer.listen(PORT, HOST, () => {
+      console.log(`🚀 Server is running on ${HOST}:${PORT}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
