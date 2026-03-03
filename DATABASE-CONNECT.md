@@ -49,7 +49,35 @@ npm run dev
 
 You should see: `✅ PostgreSQL Connected successfully` and then model sync (in development).
 
-## 5. First run / tables
+## 5. Fix "no pg_hba.conf entry ... no encryption"
+
+If you see:
+
+```text
+no pg_hba.conf entry for host "x.x.x.x", user "doadmin", database "defaultdb", no encryption
+```
+
+the app is connecting **without SSL**. Digital Ocean only allows encrypted connections.
+
+1. **Enable SSL in `.env`:**
+   ```env
+   DB_SSL=true
+   ```
+
+2. **Use the correct CA certificate** (not a generic DO URL):
+   - In Digital Ocean: your **database cluster** → **Connection details** (or **Settings**) → **Download CA certificate**.
+   - Save the file on the server, e.g. `/var/www/backend/ca-certificate.crt`.
+   - In `.env`:
+     ```env
+     DB_SSL_CA=./ca-certificate.crt
+     ```
+     Or absolute: `DB_SSL_CA=/var/www/backend/ca-certificate.crt`.
+
+3. **Trusted Sources:** In the cluster → **Settings** → **Trusted Sources**, add your Droplet IP (e.g. `64.227.39.175`) so the database accepts connections from the app.
+
+4. Restart the backend: `node server.js`.
+
+## 6. First run / tables
 
 In development the app runs `sequelize.sync({ alter: true })`, which creates or updates tables in the database. For production you can disable auto-sync by setting `NODE_ENV=production` and optionally `SYNC_DB=true` only when you want to run migrations/sync once.
 

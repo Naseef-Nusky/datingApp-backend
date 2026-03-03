@@ -21,22 +21,22 @@ const dbConfig = {
   },
 };
 
-// SSL for hosted DB (e.g. Digital Ocean Managed PostgreSQL)
-if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
+// SSL for hosted DB (e.g. Digital Ocean Managed PostgreSQL) – required or connection is rejected with "no encryption"
+const dbHost = process.env.DB_HOST || 'localhost';
+const useSSL = process.env.DB_SSL === 'true' || process.env.DB_SSL === '1' || dbHost.includes('ondigitalocean.com');
+if (useSSL) {
   dbConfig.dialectOptions = {
     ssl: {
       require: true,
       rejectUnauthorized: true,
     },
   };
-  // Optional: path to CA certificate (e.g. DO's ca-certificate.crt)
-  if (process.env.DB_SSL_CA) {
-    const caPath = path.isAbsolute(process.env.DB_SSL_CA)
-      ? process.env.DB_SSL_CA
-      : path.resolve(process.cwd(), process.env.DB_SSL_CA);
-    if (fs.existsSync(caPath)) {
-      dbConfig.dialectOptions.ssl.ca = fs.readFileSync(caPath).toString();
-    }
+  // CA certificate (required for Digital Ocean – download from cluster → Connection details → Download CA certificate)
+  const caPath = process.env.DB_SSL_CA
+    ? (path.isAbsolute(process.env.DB_SSL_CA) ? process.env.DB_SSL_CA : path.resolve(process.cwd(), process.env.DB_SSL_CA))
+    : path.join(__dirname, '..', 'ca-certificate.crt');
+  if (fs.existsSync(caPath)) {
+    dbConfig.dialectOptions.ssl.ca = fs.readFileSync(caPath).toString();
   }
 }
 
