@@ -19,19 +19,24 @@ DB_SSL=true
 - **Database name:** DO creates `defaultdb` by default. You can keep it or [create a new database](https://docs.digitalocean.com/products/databases/postgresql/how-to/manage-databases/) (e.g. `datingapp`) and set `DB_NAME=datingapp`.
 - **Network:** If the app runs on a Droplet in the same region, add the DB to the same VPC and use the **VPC host** from the control panel for lower latency. For local dev or a different network, use the **Public network** host (as above).
 
-## 2. (Optional) CA certificate
+## 2. CA certificate (required for SSL)
 
-If you see an SSL certificate error, use DO’s CA certificate:
+Digital Ocean does **not** provide a public URL for the CA. You must download it from **your** cluster:
 
-1. In the cluster → **Connection details** → **Download CA certificate**.
-2. Save it in the backend folder, e.g. `backend/ca-certificate.crt`.
-3. In `backend/.env` add:
-
+1. In Digital Ocean: **Databases** → your cluster (**vantage-dating-db**) → **Connection details** (or **Settings**).
+2. Click **Download CA certificate** and save the file.
+3. Put it on the server in the backend folder, e.g.:
+   ```bash
+   # Example: on the server
+   /var/www/backend/ca-certificate.crt
+   ```
+4. In `backend/.env`:
    ```env
    DB_SSL_CA=./ca-certificate.crt
    ```
+   Or absolute path: `DB_SSL_CA=/var/www/backend/ca-certificate.crt`.
 
-   Or use an absolute path: `DB_SSL_CA=/path/to/ca-certificate.crt`.
+**Do not use** a generic URL like `https://www.digitalocean.com/path/to/ca-certificate.crt` — that is a placeholder; the real CA is only in your cluster’s Connection details.
 
 ## 3. Allow your app’s IP (public access)
 

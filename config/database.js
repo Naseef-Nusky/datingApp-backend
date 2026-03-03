@@ -21,23 +21,23 @@ const dbConfig = {
   },
 };
 
-// SSL for hosted DB (e.g. Digital Ocean Managed PostgreSQL) – required or connection is rejected with "no encryption"
+// SSL for hosted DB (e.g. Digital Ocean Managed PostgreSQL) – require: true and CA are required or you get "no encryption"
 const dbHost = process.env.DB_HOST || 'localhost';
 const useSSL = process.env.DB_SSL === 'true' || process.env.DB_SSL === '1' || dbHost.includes('ondigitalocean.com');
 if (useSSL) {
+  const caPath = process.env.DB_SSL_CA
+    ? (path.isAbsolute(process.env.DB_SSL_CA) ? process.env.DB_SSL_CA : path.resolve(process.cwd(), process.env.DB_SSL_CA))
+    : path.join(__dirname, '..', 'ca-certificate.crt');
+  if (!fs.existsSync(caPath)) {
+    console.warn(`⚠️ DB SSL enabled but CA file not found at ${caPath}. Set DB_SSL_CA in .env or place ca-certificate.crt in backend folder.`);
+  }
   dbConfig.dialectOptions = {
     ssl: {
       require: true,
       rejectUnauthorized: true,
+      ...(fs.existsSync(caPath) && { ca: fs.readFileSync(caPath).toString() }),
     },
   };
-  // CA certificate (required for Digital Ocean – download from cluster → Connection details → Download CA certificate)
-  const caPath = process.env.DB_SSL_CA
-    ? (path.isAbsolute(process.env.DB_SSL_CA) ? process.env.DB_SSL_CA : path.resolve(process.cwd(), process.env.DB_SSL_CA))
-    : path.join(__dirname, '..', 'ca-certificate.crt');
-  if (fs.existsSync(caPath)) {
-    dbConfig.dialectOptions.ssl.ca = fs.readFileSync(caPath).toString();
-  }
 }
 
 const sequelize = new Sequelize(
