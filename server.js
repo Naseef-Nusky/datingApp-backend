@@ -41,34 +41,25 @@ import vipRoutes from './routes/vip.js';
 dotenv.config();
 
 // Allowed origins for CORS
-// Priority:
-// 1) CORS_ORIGINS (comma-separated list)
-// 2) FRONTEND_URL + CRM_URL from env
-// 3) Hard-coded production defaults for vantagedating.com
-// 4) Localhost for dev
+// Priority: 1) CORS_ORIGINS  2) FRONTEND_URL + CRM_URL  3) Fallback list (production + localhost)
+const PRODUCTION_ORIGINS = [
+  'https://vantagedating.com',
+  'https://www.vantagedating.com',
+  'https://crm.vantagedating.com',
+  'https://app.vantagedating.com',
+];
+const DEV_ORIGINS = ['http://localhost:3000', 'http://localhost:5173'];
+
 const getAllowedOrigins = () => {
   if (process.env.CORS_ORIGINS) {
     return process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   }
-
   const origins = [];
   if (process.env.FRONTEND_URL) origins.push(process.env.FRONTEND_URL.trim());
   if (process.env.CRM_URL) origins.push(process.env.CRM_URL.trim());
-
   if (origins.length > 0) return origins;
-
-  if (process.env.NODE_ENV === 'production') {
-    // Fallback hard-coded production domains
-    return [
-      'https://vantagedating.com',
-      'https://www.vantagedating.com',
-      'https://crm.vantagedating.com',
-      'https://app.vantagedating.com',
-    ];
-  }
-
-  // Dev defaults
-  return ['http://localhost:3000', 'http://localhost:5173'];
+  // No env set: allow production + dev so CORS works on api.vantagedating.com even without NODE_ENV
+  return [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
 };
 const allowedOrigins = getAllowedOrigins();
 
