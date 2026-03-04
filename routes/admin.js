@@ -399,6 +399,7 @@ router.get('/users', protect, admin, async (req, res) => {
       attributes: [
         'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
         'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
+        'subscriptionExpires', 'monthlyCreditRefill',
       ],
       order: [['createdAt', 'DESC']],
     });
@@ -769,6 +770,85 @@ router.delete('/users/:id', protect, superadmin, async (req, res) => {
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Error deleting user:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/profiles
+// @desc    List profiles for CRM (regular users + streamers). filter: all|verified|unverified|active|inactive
+// @access  Admin only
+router.get('/profiles', protect, admin, async (req, res) => {
+  try {
+    const { filter } = req.query;
+    const whereUser = {
+      userType: { [Op.in]: ['regular', 'streamer', 'talent'] },
+    };
+    if (filter === 'active') whereUser.isActive = true;
+    else if (filter === 'inactive') whereUser.isActive = false;
+    else if (filter === 'verified') whereUser.isVerified = true;
+    else if (filter === 'unverified') whereUser.isVerified = false;
+
+    const users = await User.findAll({
+      where: whereUser,
+      include: [{ model: Profile, as: 'profile', required: true, attributes: ['userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'location', 'isOnline', 'lastSeen'] }],
+      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'monthlyCreditRefill', 'createdAt'],
+      order: [['createdAt', 'DESC']],
+    });
+    const profiles = users.map((u) => ({
+      ...u.profile?.toJSON?.(),
+      id: u.profile?.id,
+      userId: u.id,
+      user: {
+        id: u.id,
+        email: u.email,
+        userType: u.userType,
+        isActive: u.isActive,
+        isVerified: u.isVerified,
+        credits: u.credits,
+        subscriptionPlan: u.subscriptionPlan,
+        subscriptionExpires: u.subscriptionExpires,
+        monthlyCreditRefill: u.monthlyCreditRefill,
+        createdAt: u.createdAt,
+      },
+    }));
+    res.json({ profiles });
+  } catch (error) {
+    console.error('Error fetching profiles:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/profiles/:userId
+// @desc    Get single profile by userId for CRM (includes subscription so CRM reflects cancel)
+// @access  Admin only
+router.get('/profiles/:userId', protect, admin, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const user = await User.findByPk(userId, {
+      include: [{ model: Profile, as: 'profile', required: false }],
+      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'monthlyCreditRefill', 'createdAt'],
+    });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user.profile && !['superadmin', 'admin', 'moderator', 'viewer'].includes(user.userType)) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+    const profile = user.profile ? user.profile.toJSON() : {};
+    profile.userId = user.id;
+    profile.user = {
+      id: user.id,
+      email: user.email,
+      userType: user.userType,
+      isActive: user.isActive,
+      isVerified: user.isVerified,
+      credits: user.credits,
+      subscriptionPlan: user.subscriptionPlan,
+      subscriptionExpires: user.subscriptionExpires,
+      monthlyCreditRefill: user.monthlyCreditRefill,
+      createdAt: user.createdAt,
+    };
+    res.json({ profile });
+  } catch (error) {
+    console.error('Error fetching profile:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -1804,6 +1884,62 @@ router.delete('/wishlist-products/:id', protect, admin, async (req, res) => {
 // ============================================
 // Credit Settings (chat, voice, video) - managed via CRM
 // ============================================
+
+// @route   GET /api/admin/payments
+// @desc    List subscription and refill payments for CRM (from CreditTransaction)
+// @access  Admin
+router.get('/payments', protect, admin, async (req, res) => {
+  try {
+    const { filter, limit = 500, userId } = req.query; // filter: all | subscription | refill; userId: optional filter by user
+    let txWhere = filter === 'subscription'
+      ? { type: 'subscription' }
+      : filter === 'refill'
+        ? { type: 'purchase', description: { [Op.iLike]: '%refill%' } }
+        : {
+            [Op.or]: [
+              { type: 'subscription' },
+              { type: 'purchase', description: { [Op.iLike]: '%refill%' } },
+            ],
+          };
+    const whereClause = userId ? { [Op.and]: [txWhere, { userId }] } : txWhere;
+    const transactions = await CreditTransaction.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'email'],
+          include: [{ model: Profile, as: 'profile', required: false, attributes: ['firstName', 'lastName'] }],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: Math.min(parseInt(limit, 10) || 500, 1000),
+    });
+    const payments = transactions.map((t) => {
+      const u = t.user;
+      const paymentType = t.type === 'subscription' ? 'subscription' : 'refill';
+      return {
+        id: t.id,
+        userId: t.userId,
+        type: paymentType,
+        amount: t.amount,
+        description: t.description,
+        relatedTo: t.relatedTo,
+        createdAt: t.createdAt,
+        user: u ? {
+          id: u.id,
+          email: u.email,
+          firstName: u.profile?.firstName,
+          lastName: u.profile?.lastName,
+        } : null,
+      };
+    });
+    res.json({ payments });
+  } catch (error) {
+    console.error('Error fetching payments:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 
 // @route   GET /api/admin/credit-settings
 // @desc    Get current credit costs for chat messages and calls
