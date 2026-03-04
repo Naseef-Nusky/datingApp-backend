@@ -18,19 +18,30 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Send email to actual email address
+ * Send email to actual email address.
+ * Uses SendGrid if SENDGRID_API_KEY is set (recommended for production), otherwise SMTP.
  * @param {string} to - Recipient email address
  * @param {string} subject - Email subject
  * @param {string} htmlContent - HTML email content
  * @param {string} textContent - Plain text email content (optional)
- * @param {Array} attachments - Array of attachment objects (optional)
- * @returns {Promise} - Nodemailer send result
+ * @param {Array} attachments - Array of attachment objects (optional; SMTP only)
+ * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
  */
 export const sendEmail = async (to, subject, htmlContent, textContent = null, attachments = []) => {
   try {
-    // Verify transporter configuration
+    // Prefer SendGrid in production (and when configured) – no SMTP needed
+    if (process.env.SENDGRID_API_KEY) {
+      const { sendEmail: sendGridSend } = await import('./sendgridService.js');
+      const result = await sendGridSend(to, subject, htmlContent, textContent);
+      if (result.success) {
+        console.log('✅ Email sent via SendGrid:', result.messageId);
+      }
+      return result;
+    }
+
+    // Fallback: SMTP (nodemailer)
     if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.warn('⚠️ SMTP configuration missing. Email will not be sent.');
+      console.warn('⚠️ No email configured: set SENDGRID_API_KEY (and SENDGRID_FROM_EMAIL) or SMTP_* in .env');
       return { success: false, error: 'SMTP not configured' };
     }
 
@@ -44,7 +55,7 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, at
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log('✅ Email sent successfully:', info.messageId);
+    console.log('✅ Email sent successfully (SMTP):', info.messageId);
     return { success: true, messageId: info.messageId };
   } catch (error) {
     console.error('❌ Error sending email:', error);

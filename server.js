@@ -743,6 +743,15 @@ const startServer = async () => {
     // Start server
     httpServer.listen(PORT, HOST, () => {
       console.log(`🚀 Server is running on ${HOST}:${PORT}`);
+      // Log email config so production issues are easier to debug
+      if (process.env.SENDGRID_API_KEY) {
+        const from = process.env.SENDGRID_FROM_EMAIL || '(not set)';
+        console.log(`📧 Email: SendGrid (FROM: ${from}) — verify sender at https://app.sendgrid.com/settings/sender_auth/senders`);
+      } else if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+        console.log('📧 Email: SMTP configured');
+      } else {
+        console.warn('⚠️ Email: No SENDGRID_API_KEY or SMTP_* set — login links and notifications will not be sent');
+      }
     });
   } catch (error) {
     console.error('Failed to start server:', error);
