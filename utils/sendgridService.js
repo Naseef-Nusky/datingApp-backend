@@ -10,10 +10,11 @@ if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
-// Get FROM email - must be verified in SendGrid
+// Get FROM email - must be verified in SendGrid (use your own domain to reduce spam)
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating Team';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const REPLY_TO = process.env.SENDGRID_REPLY_TO || process.env.SUPPORT_EMAIL || FROM_EMAIL;
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 // Logo URL for SendGrid emails (DigitalOcean Spaces); override with SENDGRID_LOGO_URL or PUBLIC_LOGO_URL if needed
 const LOGO_URL = process.env.SENDGRID_LOGO_URL || process.env.PUBLIC_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
 // Lock icon URL for attachment thumbnails in SendGrid emails (DigitalOcean Spaces)
@@ -572,12 +573,23 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       .replace(/&quot;/g, '"')
       .trim();
 
+    // List-Unsubscribe and Reply-To improve deliverability and reduce spam folder placement
+    const preferencesUrl = `${FRONTEND_URL}/settings/email-preferences`;
+    const deliverabilityHeaders = {
+      'X-Entity-Ref-ID': trackingData.messageId || trackingData.userId || 'email-notification',
+      'List-Unsubscribe': `<${preferencesUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      'Precedence': 'auto',
+      'X-Auto-Response-Suppress': 'OOF, AutoReply',
+    };
+
     const msg = {
       to,
       from: {
         email: FROM_EMAIL,
         name: FROM_NAME,
       },
+      replyTo: REPLY_TO || undefined,
       subject,
       html: htmlContent,
       text: plainText,
@@ -586,23 +598,11 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
         openTracking: { enable: true },
       },
       customArgs: trackingData, // For webhook tracking
-      // Add headers to improve deliverability and reduce spam
-      headers: {
-        'X-Entity-Ref-ID': trackingData.messageId || trackingData.userId || 'email-notification',
-      },
-      // Add categories for better tracking
+      headers: deliverabilityHeaders,
       categories: ['notification', 'message', trackingData.notificationType || 'general'],
-      // Mail settings for better deliverability
       mailSettings: {
-        sandboxMode: {
-          enable: false, // Set to true for testing
-        },
+        sandboxMode: { enable: false },
       },
-      // Remove asm if groupId is 0 (invalid) - SendGrid will add unsubscribe automatically
-      // asm: {
-      //   groupId: 0, // Invalid - removed
-      //   groupsToDisplay: [],
-      // },
     };
 
     const sendStartTime = Date.now();
