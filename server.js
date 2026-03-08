@@ -87,8 +87,10 @@ const HOST = process.env.HOST || '0.0.0.0';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Middleware
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+// Middleware: CORS. Set PROXY_HANDLES_CORS=1 if your proxy/CDN adds CORS headers to avoid duplicate header error.
+if (!process.env.PROXY_HANDLES_CORS) {
+  app.use(cors({ origin: allowedOrigins, credentials: true }));
+}
 
 // Stripe webhook needs raw body for signature verification (must be before express.json)
 app.use('/api/credits/stripe-webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
