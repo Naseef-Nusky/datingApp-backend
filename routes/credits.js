@@ -7,6 +7,7 @@ import { protect } from '../middleware/auth.js';
 import { getCreditSettings, DEFAULT_REFILL_PACKS } from '../utils/creditSettings.js';
 
 const STRIPE_PRICES_KEY = 'stripe.credit_pack_prices';
+const STRIPE_SUBSCRIPTION_PRICES_KEY = 'stripe.subscription_prices'; // recurring monthly
 const STRIPE_REFILL_PRICES_KEY = 'stripe.refill_pack_prices';
 
 const router = express.Router();
@@ -70,6 +71,39 @@ async function getOrCreateStripePrice(plan, displayLabel, credits, amountCents) 
 
   const updated = { ...(setting?.value || {}), [plan]: { priceId: price.id, amountCents, displayLabel } };
   await SystemSetting.upsert({ key: STRIPE_PRICES_KEY, value: updated });
+  return price.id;
+}
+
+// Get or create Stripe Price for recurring monthly subscription (used for auto-renewal)
+async function getOrCreateStripeSubscriptionPrice(plan, displayLabel, credits, amountCents) {
+  const setting = await SystemSetting.findByPk(STRIPE_SUBSCRIPTION_PRICES_KEY);
+  const stored = (setting?.value && setting.value[plan]) || {};
+  const { priceId, amountCents: storedAmount, displayLabel: storedLabel } = stored;
+
+  if (priceId && storedAmount === amountCents && storedLabel === displayLabel) {
+    try {
+      const price = await stripe.prices.retrieve(priceId);
+      if (price.unit_amount === amountCents && price.currency === 'usd' && price.recurring?.interval === 'month') {
+        return priceId;
+      }
+    } catch {
+      // Price deleted or invalid, create new
+    }
+  }
+
+  const product = await stripe.products.create({
+    name: displayLabel,
+    description: `${credits} credits per month (recurring)`,
+  });
+  const price = await stripe.prices.create({
+    product: product.id,
+    currency: 'usd',
+    unit_amount: amountCents,
+    recurring: { interval: 'month' },
+  });
+
+  const updated = { ...(setting?.value || {}), [plan]: { priceId: price.id, amountCents, displayLabel } };
+  await SystemSetting.upsert({ key: STRIPE_SUBSCRIPTION_PRICES_KEY, value: updated });
   return price.id;
 }
 
@@ -271,6 +305,8 @@ async function grantSubscription(userId, plan, creditsOverride) {
     subscriptionPlan: plan,
     monthlyCreditRefill: credits,
     subscriptionExpires: expires,
+    subscriptionCancelledAt: null,
+    subscriptionEndsAt: null, // clear when (re)subscribing
     credits: (user.credits || 0) + credits,
   });
   await CreditTransaction.create({
@@ -296,10 +332,19 @@ router.post('/create-checkout-session', protect, async (req, res) => {
       return res.status(400).json({ message: 'Invalid subscription plan' });
     }
 
-    const user = await User.findByPk(req.user.id);
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'userType', 'stripeSubscriptionId'] });
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.userType === 'streamer' || user.userType === 'talent') {
       return res.status(403).json({ message: 'Streamers do not need subscriptions' });
+    }
+
+    // If changing plan: cancel existing Stripe subscription so user is not double-charged
+    if (user.stripeSubscriptionId) {
+      try {
+        await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+      } catch (err) {
+        console.warn('Cancel existing subscription (change plan):', err.message);
+      }
     }
 
     const planDetails = SUBSCRIPTION_PLANS[plan];
@@ -314,10 +359,10 @@ router.post('/create-checkout-session', protect, async (req, res) => {
 
     const credits = getCreditsForPlan(plan, packConfig);
     const displayLabel = packConfig?.creditsLabel?.trim() || `${credits} Credits/Mo`;
-    const priceId = await getOrCreateStripePrice(plan, displayLabel, credits, amountCents);
+    const priceId = await getOrCreateStripeSubscriptionPrice(plan, displayLabel, credits, amountCents);
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
+      mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [
         {
@@ -333,6 +378,13 @@ router.post('/create-checkout-session', protect, async (req, res) => {
         plan,
         credits: String(credits),
       },
+      subscription_data: {
+        metadata: {
+          userId: String(req.user.id),
+          plan,
+          credits: String(credits),
+        },
+      },
     });
 
     res.json({ url: session.url, sessionId: session.id });
@@ -343,7 +395,7 @@ router.post('/create-checkout-session', protect, async (req, res) => {
 });
 
 // @route   POST /api/credits/confirm-payment
-// @desc    After Stripe redirect: verify session with Stripe (secret key only) and grant subscription. No webhook needed.
+// @desc    After Stripe redirect: verify session, store subscription/customer ids (for recurring), grant first month.
 // @access  Private
 router.post('/confirm-payment', protect, async (req, res) => {
   try {
@@ -354,7 +406,7 @@ router.post('/confirm-payment', protect, async (req, res) => {
     if (!sessionId) {
       return res.status(400).json({ message: 'Missing session_id' });
     }
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ['subscription'] });
     if (session.payment_status !== 'paid') {
       return res.status(400).json({ message: 'Payment not completed' });
     }
@@ -374,6 +426,18 @@ router.post('/confirm-payment', protect, async (req, res) => {
       return res.json({ message: 'Already applied', subscriptionPlan: updated?.subscriptionPlan, totalCredits: updated?.credits ?? 0 });
     }
     await grantSubscription(req.user.id, plan, creditsOverride);
+    // Store Stripe subscription & customer so we can cancel later and so webhooks can find user for renewals
+    const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+    if (subscriptionId || customerId) {
+      await User.update(
+        {
+          ...(subscriptionId && { stripeSubscriptionId: subscriptionId }),
+          ...(customerId && { stripeCustomerId: customerId }),
+        },
+        { where: { id: req.user.id } }
+      );
+    }
     await SystemSetting.upsert({
       key: 'stripe.fulfilled_sessions',
       value: { sessionIds: [...ids.slice(-999), sessionId] },
@@ -495,6 +559,8 @@ router.post('/subscribe', protect, async (req, res) => {
 });
 
 // Stripe webhook handler (must be used with express.raw for body). Export for use in server.js.
+// Handles: checkout.session.completed (store ids + grant first month if not from confirm-payment),
+//          invoice.paid (subscription_cycle = grant monthly credits), customer.subscription.deleted (set plan free).
 export async function handleStripeWebhook(req, res) {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
     return res.status(503).send('Stripe webhook not configured');
@@ -507,38 +573,133 @@ export async function handleStripeWebhook(req, res) {
     console.error('Stripe webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-  if (event.type !== 'checkout.session.completed') {
+
+  // Recurring: subscription cancelled – set user plan to free
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    const subId = subscription.id;
+    try {
+      const user = await User.findOne({ where: { stripeSubscriptionId: subId } });
+      if (user) {
+        await user.update({
+          subscriptionPlan: 'free',
+          monthlyCreditRefill: 0,
+          subscriptionExpires: null,
+          subscriptionCancelledAt: new Date(),
+          subscriptionEndsAt: user.subscriptionExpires || null, // keep ending date for CRM
+          stripeSubscriptionId: null,
+          stripeCustomerId: null,
+        });
+        console.log(`Stripe: subscription cancelled for user ${user.id}`);
+      }
+    } catch (err) {
+      console.error('Stripe webhook subscription.deleted error:', err);
+      return res.status(500).json({ received: false });
+    }
     return res.json({ received: true });
   }
-  const session = event.data.object;
-  const userId = session.metadata?.userId || session.client_reference_id;
-  const plan = session.metadata?.plan;
-  if (!userId || !plan || !SUBSCRIPTION_PLANS[plan]) {
-    console.error('Stripe webhook: missing or invalid metadata');
-    return res.status(400).json({ received: false });
+
+  // Recurring: monthly invoice paid – grant credits for this billing cycle
+  if (event.type === 'invoice.paid') {
+    const invoice = event.data.object;
+    if (invoice.billing_reason !== 'subscription_cycle') {
+      return res.json({ received: true }); // first payment handled by confirm-payment
+    }
+    const subId = invoice.subscription;
+    if (!subId) return res.json({ received: true });
+    try {
+      const user = await User.findOne({ where: { stripeSubscriptionId: subId } });
+      if (!user || !user.subscriptionPlan || user.subscriptionPlan === 'free') {
+        return res.json({ received: true });
+      }
+      const plan = user.subscriptionPlan;
+      const planDetails = SUBSCRIPTION_PLANS[plan];
+      const credits = (user.monthlyCreditRefill > 0 ? user.monthlyCreditRefill : planDetails?.credits) ?? 0;
+      if (credits <= 0) return res.json({ received: true });
+      const expires = new Date();
+      expires.setMonth(expires.getMonth() + 1);
+      await user.update({
+        credits: (user.credits || 0) + credits,
+        subscriptionExpires: expires,
+      });
+      await CreditTransaction.create({
+        userId: user.id,
+        type: 'subscription',
+        amount: credits,
+        description: `Subscription renewal: ${plan}`,
+        relatedTo: 'subscription',
+      });
+      console.log(`Stripe: subscription renewal credits granted for user ${user.id} plan ${plan} (+${credits})`);
+    } catch (err) {
+      console.error('Stripe webhook invoice.paid error:', err);
+      return res.status(500).json({ received: false });
+    }
+    return res.json({ received: true });
   }
-  const creditsOverride = session.metadata?.credits ? parseInt(session.metadata.credits, 10) : undefined;
-  try {
-    await grantSubscription(userId, plan, creditsOverride);
-    console.log(`Stripe: subscription granted for user ${userId} plan ${plan}`);
-  } catch (err) {
-    console.error('Stripe webhook grant error:', err);
-    return res.status(500).json({ received: false });
+
+  // Checkout completed (subscription): store subscription/customer on user, grant first month if not already done
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const userId = session.metadata?.userId || session.client_reference_id;
+    const plan = session.metadata?.plan;
+    if (!userId || !plan || !SUBSCRIPTION_PLANS[plan]) {
+      console.error('Stripe webhook: missing or invalid metadata');
+      return res.status(400).json({ received: false });
+    }
+    const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+    try {
+      const user = await User.findByPk(userId);
+      if (user && (subscriptionId || customerId)) {
+        await user.update({
+          ...(subscriptionId && { stripeSubscriptionId: subscriptionId }),
+          ...(customerId && { stripeCustomerId: customerId }),
+        });
+      }
+      const fulfilled = await SystemSetting.findByPk('stripe.fulfilled_sessions');
+      const ids = (fulfilled?.value && fulfilled.value.sessionIds) || [];
+      if (!ids.includes(session.id)) {
+        const creditsOverride = session.metadata?.credits ? parseInt(session.metadata.credits, 10) : undefined;
+        await grantSubscription(userId, plan, creditsOverride);
+        await SystemSetting.upsert({
+          key: 'stripe.fulfilled_sessions',
+          value: { sessionIds: [...ids.slice(-999), session.id] },
+        });
+        console.log(`Stripe: subscription granted for user ${userId} plan ${plan}`);
+      }
+    } catch (err) {
+      console.error('Stripe webhook grant error:', err);
+      return res.status(500).json({ received: false });
+    }
+    return res.json({ received: true });
   }
+
   res.json({ received: true });
 }
 
 // @route   POST /api/credits/cancel-subscription
-// @desc    Cancel subscription
+// @desc    Cancel subscription (Stripe recurring + local state)
 // @access  Private
 router.post('/cancel-subscription', protect, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.stripeSubscriptionId && stripe) {
+      try {
+        await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+      } catch (err) {
+        console.error('Stripe cancel subscription error:', err.message);
+        // Still clear local state so user is not stuck
+      }
+    }
     await user.update({
       subscriptionPlan: 'free',
       monthlyCreditRefill: 0,
       subscriptionExpires: null,
+      subscriptionCancelledAt: new Date(),
+      subscriptionEndsAt: user.subscriptionExpires || null, // keep ending date for CRM
+      stripeSubscriptionId: null,
+      stripeCustomerId: null,
     });
     res.json({ message: 'Subscription cancelled' });
   } catch (error) {

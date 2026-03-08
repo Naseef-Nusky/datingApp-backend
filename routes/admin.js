@@ -399,7 +399,7 @@ router.get('/users', protect, admin, async (req, res) => {
       attributes: [
         'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
         'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
-        'subscriptionExpires', 'monthlyCreditRefill',
+        'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill',
       ],
       order: [['createdAt', 'DESC']],
     });
@@ -791,7 +791,7 @@ router.get('/profiles', protect, admin, async (req, res) => {
     const users = await User.findAll({
       where: whereUser,
       include: [{ model: Profile, as: 'profile', required: true, attributes: ['userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'location', 'isOnline', 'lastSeen'] }],
-      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'monthlyCreditRefill', 'createdAt'],
+      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill', 'createdAt'],
       order: [['createdAt', 'DESC']],
     });
     const profiles = users.map((u) => ({
@@ -826,7 +826,7 @@ router.get('/profiles/:userId', protect, admin, async (req, res) => {
     const userId = req.params.userId;
     const user = await User.findByPk(userId, {
       include: [{ model: Profile, as: 'profile', required: false }],
-      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'monthlyCreditRefill', 'createdAt'],
+      attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill', 'createdAt'],
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (!user.profile && !['superadmin', 'admin', 'moderator', 'viewer'].includes(user.userType)) {
@@ -843,6 +843,8 @@ router.get('/profiles/:userId', protect, admin, async (req, res) => {
       credits: user.credits,
       subscriptionPlan: user.subscriptionPlan,
       subscriptionExpires: user.subscriptionExpires,
+      subscriptionCancelledAt: user.subscriptionCancelledAt,
+      subscriptionEndsAt: user.subscriptionEndsAt,
       monthlyCreditRefill: user.monthlyCreditRefill,
       createdAt: user.createdAt,
     };
@@ -1934,7 +1936,21 @@ router.get('/payments', protect, admin, async (req, res) => {
         } : null,
       };
     });
-    res.json({ payments });
+    let subscription = null;
+    if (userId) {
+      const u = await User.findByPk(userId, {
+        attributes: ['subscriptionPlan', 'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt'],
+      });
+      if (u) {
+        subscription = {
+          plan: u.subscriptionPlan || 'free',
+          expires: u.subscriptionExpires,
+          cancelledAt: u.subscriptionCancelledAt,
+          endsAt: u.subscriptionEndsAt,
+        };
+      }
+    }
+    res.json({ payments, subscription });
   } catch (error) {
     console.error('Error fetching payments:', error);
     res.status(500).json({ message: 'Server error', error: error.message });

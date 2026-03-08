@@ -80,6 +80,16 @@ const User = sequelize.define(
       type: DataTypes.DATE,
       allowNull: true,
     },
+    subscriptionCancelledAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'subscription_cancelled_at',
+    },
+    subscriptionEndsAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'subscription_ends_at',
+    },
     totalCreditsSpent: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
@@ -108,6 +118,16 @@ const User = sequelize.define(
     monthlyCreditRefill: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
+    },
+    stripeSubscriptionId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'stripe_subscription_id',
+    },
+    stripeCustomerId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'stripe_customer_id',
     },
     emailPreferences: {
       type: DataTypes.JSONB,
