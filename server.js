@@ -51,15 +51,17 @@ const PRODUCTION_ORIGINS = [
 const DEV_ORIGINS = ['http://localhost:3000', 'http://localhost:5173'];
 
 const getAllowedOrigins = () => {
+  let origins;
   if (process.env.CORS_ORIGINS) {
-    return process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+    origins = process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  } else {
+    const list = [];
+    if (process.env.FRONTEND_URL) list.push(process.env.FRONTEND_URL.trim());
+    if (process.env.CRM_URL) list.push(process.env.CRM_URL.trim());
+    origins = list.length > 0 ? list : [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
   }
-  const origins = [];
-  if (process.env.FRONTEND_URL) origins.push(process.env.FRONTEND_URL.trim());
-  if (process.env.CRM_URL) origins.push(process.env.CRM_URL.trim());
-  if (origins.length > 0) return origins;
-  // No env set: allow production + dev so CORS works on api.vantagedating.com even without NODE_ENV
-  return [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
+  // Deduplicate to avoid "multiple values" CORS error (browser rejects duplicate header values)
+  return [...new Set(origins)];
 };
 const allowedOrigins = getAllowedOrigins();
 
