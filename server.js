@@ -58,7 +58,12 @@ const getAllowedOrigins = () => {
     const list = [];
     if (process.env.FRONTEND_URL) list.push(process.env.FRONTEND_URL.trim());
     if (process.env.CRM_URL) list.push(process.env.CRM_URL.trim());
-    origins = list.length > 0 ? list : [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
+    if (list.length > 0) {
+      // If only one of FRONTEND_URL/CRM_URL is set, allow all production origins so both app and crm work
+      origins = list.length >= 2 ? list : [...PRODUCTION_ORIGINS, ...list];
+    } else {
+      origins = [...PRODUCTION_ORIGINS, ...DEV_ORIGINS];
+    }
   }
   // Deduplicate to avoid "multiple values" CORS error (browser rejects duplicate header values)
   return [...new Set(origins)];
