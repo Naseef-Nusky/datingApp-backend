@@ -37,6 +37,7 @@ import adminRoutes from './routes/admin.js';
 import wishlistRoutes from './routes/wishlist.js';
 import settingsRoutes from './routes/settings.js';
 import vipRoutes from './routes/vip.js';
+import translateRoutes from './routes/translate.js';
 
 dotenv.config();
 
@@ -149,6 +150,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/vip', vipRoutes);
+app.use('/api/translate', translateRoutes);
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections

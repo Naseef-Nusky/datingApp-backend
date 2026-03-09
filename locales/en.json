@@ -1,0 +1,68 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "back": "Back",
+    "search": "Search",
+    "online": "Online",
+    "offline": "Offline",
+    "credits": "Credits",
+    "refill": "Refill",
+    "upgradeAccount": "UPGRADE ACCOUNT",
+    "refillAccount": "REFILL ACCOUNT",
+    "viewPayments": "View payments",
+    "language": "Language"
+  },
+  "nav": {
+    "search": "SEARCH",
+    "inbox": "INBOX",
+    "dashboard": "Dashboard",
+    "contacts": "Contacts",
+    "chatRequests": "Chat requests",
+    "settings": "Settings",
+    "logout": "Log out",
+    "profile": "Profile",
+    "about": "About",
+    "privacy": "Privacy",
+    "refund": "Refund",
+    "safety": "Safety",
+    "terms": "Terms"
+  },
+  "home": {
+    "login": "Log in",
+    "register": "Register",
+    "getStarted": "Get started"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "noProfiles": "No profiles to show.",
+    "upgradeToSeeMore": "Upgrade to see more"
+  },
+  "profile": {
+    "back": "BACK",
+    "changeSubscription": "CHANGE SUBSCRIPTION PLAN",
+    "updateCover": "UPDATE COVER",
+    "uploadPhoto": "UPLOAD PHOTO",
+    "lastActive": "Last Active",
+    "aboutMe": "About me",
+    "interests": "Interests",
+    "lifestyle": "Lifestyle",
+    "contact": "Contact",
+    "sendMessage": "Send message",
+    "report": "Report"
+  },
+  "inbox": {
+    "title": "Inbox",
+    "noChats": "No conversations yet.",
+    "startChat": "Start a conversation from a profile."
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "sound": "Sound",
+    "notifications": "Notifications",
+    "account": "Account"
+  }
+}
