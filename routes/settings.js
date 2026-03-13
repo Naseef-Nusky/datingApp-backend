@@ -137,7 +137,11 @@ router.put('/', protect, async (req, res) => {
         updatedAt: new Date().toISOString(),
       };
 
-      // Implement only non-destructive manage-account actions here for now.
+      // For CRM / admin visibility: mark users who requested delete profile as inactive.
+      if (manageAccountOption === 'delete-profile') {
+        user.isActive = false;
+      }
+
       // For "turn-off-email", we disable all email notifications below.
     }
 
