@@ -68,6 +68,32 @@ async function translateBatch(texts, target, apiKey) {
   return (data.data?.translations || []).map((t) => t.translatedText || '');
 }
 
+/**
+ * Translate an array of text strings to the target language (Google Cloud Translation API).
+ * Used by POST /api/translate for whole-page translation.
+ */
+export async function translateTexts(texts, target) {
+  if (!texts || !Array.isArray(texts) || texts.length === 0) {
+    return [];
+  }
+  const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY;
+  if (!apiKey) {
+    console.warn('GOOGLE_TRANSLATE_API_KEY not set.');
+    return texts;
+  }
+  const targetLang = target === 'en-uk' ? 'en' : (target || 'en');
+  if (targetLang === 'en') return texts;
+
+  const filtered = texts.map((t) => (typeof t === 'string' && t.trim() ? t : ''));
+  const results = [];
+  for (let i = 0; i < filtered.length; i += BATCH_SIZE) {
+    const batch = filtered.slice(i, i + BATCH_SIZE);
+    const translated = await translateBatch(batch, targetLang, apiKey);
+    results.push(...translated);
+  }
+  return results;
+}
+
 export async function translateLocale(targetLang) {
   if (targetLang === 'en' || targetLang === 'en-uk') {
     return getSourceLocale();
