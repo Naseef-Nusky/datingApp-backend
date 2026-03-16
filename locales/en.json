@@ -192,9 +192,9 @@
   "landing": {
     "login": "Log in",
     "getStarted": "Get started",
-    "globalDating": "Global Online Dating",
-    "globalDatingSub": "Enjoy virtual connections with like-minded people around the world.",
-    "takeAChance": "Take a chance!",
+    "globalDating": "Worldwide Online Dating",
+    "globalDatingSub": "Connect virtually with like-minded people across the globe.",
+    "takeAChance": "Give it a try!",
     "signInWithGoogle": "Sign in with Google",
     "yourEmail": "Your Email",
     "password": "Password",
@@ -326,7 +326,7 @@
       "devMode": "SMTP is not configured (dev mode). Use the link below to log in:",
       "devLinkLabel": "Development login link (expires in 1 hour):",
       "openLoginLink": "Open login link",
-      "checkGmail": "Check your Gmail account",
+      "checkGmail": "Check your email",
       "backToSignIn": "Back to sign in"
     }
   }
