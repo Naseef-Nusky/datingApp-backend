@@ -144,6 +144,7 @@ router.get('/', protect, async (req, res) => {
     // - Regular users should NEVER see admin/superadmin/moderator/viewer accounts.
     // - Regular users can see real users + streamers.
     // - Streamers/talent must only see real users (no other streamers/admins).
+    // - Admin/CRM views should still respect registrationComplete so only fully registered users appear.
     const isStreamerOrTalent = req.user.userType === 'streamer' || req.user.userType === 'talent';
     const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
 

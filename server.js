@@ -49,7 +49,11 @@ const PRODUCTION_ORIGINS = [
   'https://crm.vantagedating.com',
   'https://app.vantagedating.com',
 ];
-const DEV_ORIGINS = ['http://localhost:3000', 'http://localhost:5173'];
+const DEV_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:5175', // landing-page Vite dev server
+];
 
 const getAllowedOrigins = () => {
   let origins;
@@ -94,8 +98,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Middleware: CORS. Set PROXY_HANDLES_CORS=1 if your proxy/CDN adds CORS headers to avoid duplicate header error.
+// In development, also allow any http://localhost:* origin so additional Vite dev servers (e.g. landing page) work.
 if (!process.env.PROXY_HANDLES_CORS) {
-  app.use(cors({ origin: allowedOrigins, credentials: true }));
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        // Allow tools like Postman/curl (no origin header)
+        if (!origin) return callback(null, true);
+
+        // Allow any localhost origin in dev (e.g. 3000, 5173, 5175, etc.)
+        if (origin.startsWith('http://localhost:')) {
+          return callback(null, true);
+        }
+
+        // Otherwise fall back to the computed allowedOrigins list
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        return callback(new Error(`Not allowed by CORS: ${origin}`));
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    })
+  );
 }
 
 // Stripe webhook needs raw body for signature verification (must be before express.json)
