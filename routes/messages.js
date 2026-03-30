@@ -46,6 +46,34 @@ const getChatMessageCost = async () => {
   }
 };
 
+// Block sharing direct contact details in chat-like messages.
+const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+const PHONE_LIKE_RE = /(?:\+?\d[\d\s().-]{6,}\d)/g;
+
+function hasBlockedContactInfo(text) {
+  const input = String(text || '');
+  if (!input.trim()) return false;
+
+  if (EMAIL_RE.test(input)) return true;
+
+  const phoneMatches = input.match(PHONE_LIKE_RE) || [];
+  for (const raw of phoneMatches) {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length >= 8) return true;
+  }
+
+  return false;
+}
+
+function validateNoContactInfoOrReject(res, textValue) {
+  if (!hasBlockedContactInfo(textValue)) return false;
+  res.status(400).json({
+    message: 'Sharing phone numbers or email addresses is not allowed in chat.',
+    code: 'CONTACT_INFO_BLOCKED',
+  });
+  return true;
+}
+
 // Helper function to find or create chat between two users
 const findOrCreateChat = async (user1Id, user2Id) => {
   // Ensure consistent ordering (smaller ID first)
@@ -85,6 +113,11 @@ router.post('/', protect, async (req, res) => {
     // Allow empty content if mediaUrl is provided (for media-only messages)
     if (!content && !mediaUrl) {
       return res.status(400).json({ message: 'Content or media URL is required' });
+    }
+
+    // Block direct contact details for chat-style messages, including media captions.
+    if (validateNoContactInfoOrReject(res, content)) {
+      return;
     }
 
     // Check if users are blocked
@@ -856,6 +889,10 @@ router.post('/intro', protect, async (req, res) => {
       return res.status(400).json({ message: 'Content required' });
     }
 
+    if (validateNoContactInfoOrReject(res, content)) {
+      return;
+    }
+
     // Anti-spam limit (max 10 intro messages at once)
     if (receiverIds.length > 10) {
       return res.status(400).json({ message: 'Maximum 10 intro messages at once' });
@@ -924,6 +961,10 @@ router.post('/chat-requests', protect, async (req, res) => {
 
     if (!receiverId || !firstMessage) {
       return res.status(400).json({ message: 'Receiver ID and first message required' });
+    }
+
+    if (validateNoContactInfoOrReject(res, firstMessage)) {
+      return;
     }
 
     if (receiverId === req.user.id) {
@@ -1266,6 +1307,10 @@ router.post('/mingle', protect, async (req, res) => {
 
     if (!message || !message.trim()) {
       return res.status(400).json({ message: 'Message is required' });
+    }
+
+    if (validateNoContactInfoOrReject(res, message)) {
+      return;
     }
 
     // Build query to find matching profiles

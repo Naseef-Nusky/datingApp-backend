@@ -774,6 +774,74 @@ router.delete('/users/:id', protect, superadmin, async (req, res) => {
   }
 });
 
+// @route   DELETE /api/admin/users
+// @desc    Permanently delete all non-admin users (optionally by type: all|real|streamers)
+// @access  Superadmin only
+router.delete('/users', protect, superadmin, async (req, res) => {
+  try {
+    const { type = 'all' } = req.query;
+
+    const where = {
+      userType:
+        type === 'streamers'
+          ? { [Op.in]: ['streamer', 'talent'] }
+          : type === 'real'
+            ? 'regular'
+            : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'] },
+    };
+
+    const users = await User.findAll({
+      where,
+      attributes: ['id', 'userType'],
+    });
+
+    if (users.length === 0) {
+      return res.json({ message: 'No users matched the selected type', deletedCount: 0 });
+    }
+
+    let deletedCount = 0;
+    for (const user of users) {
+      const id = user.id;
+
+      // Messages where user is sender or receiver
+      await Message.destroy({ where: { [Op.or]: [{ sender: id }, { receiver: id }] } });
+      // Chat requests where user is sender or receiver
+      await ChatRequest.destroy({ where: { [Op.or]: [{ senderId: id }, { receiverId: id }] } });
+      // Call requests where user is caller or receiver
+      await CallRequest.destroy({ where: { [Op.or]: [{ callerId: id }, { receiverId: id }] } });
+      // Gifts sent or received by this user
+      await Gift.destroy({ where: { [Op.or]: [{ sender: id }, { receiver: id }] } });
+      // Credit transactions for this user
+      await CreditTransaction.destroy({ where: { userId: id } });
+      // Notifications for this user
+      await Notification.destroy({ where: { userId: id } });
+      // Reports where user is reporter or reported
+      await Report.destroy({ where: { [Op.or]: [{ reporter: id }, { reportedUser: id }] } });
+      // Blocks involving this user
+      await Block.destroy({ where: { [Op.or]: [{ blocker: id }, { blocked: id }] } });
+      // Matches involving this user
+      await Match.destroy({ where: { [Op.or]: [{ user1: id }, { user2: id }] } });
+      // Stories created by this user
+      await Story.destroy({ where: { userId: id } });
+      // Chats where this user participates
+      await Chat.destroy({ where: { [Op.or]: [{ user1Id: id }, { user2Id: id }] } });
+      // Delete profile and user
+      await Profile.destroy({ where: { userId: id } });
+      await user.destroy();
+
+      deletedCount++;
+    }
+
+    return res.json({
+      message: `Deleted ${deletedCount} users successfully`,
+      deletedCount,
+    });
+  } catch (error) {
+    console.error('Error deleting users in bulk:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   GET /api/admin/profiles
 // @desc    List profiles for CRM (regular users + streamers). filter: all|verified|unverified|active|inactive
 // @access  Admin only

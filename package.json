@@ -9,7 +9,12 @@
     "dev": "nodemon server.js",
     "seed": "node scripts/seedUsers.js",
     "create-admin": "node scripts/createAdmin.js",
-    "update-superadmin": "node scripts/updateToSuperAdmin.js"
+    "update-superadmin": "node scripts/updateToSuperAdmin.js",
+    "import-dummy-profiles": "node scripts/importDummyProfilesFromCsv.js",
+    "generate-dummy-man-csv": "node scripts/generateDummyManProfilesCsv.js",
+    "create-dummy-man": "node scripts/createDummyManProfiles.js",
+    "create-dummy-man-import": "node scripts/createDummyManProfiles.js --import",
+    "import-dummy-man": "node scripts/importDummyProfilesFromCsv.js ./scripts/dummy_profiles_man.csv \"./scripts/dummy images man\""
   },
   "keywords": [
     "dating",

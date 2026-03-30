@@ -90,10 +90,22 @@ router.get('/', protect, async (req, res) => {
     
     console.log('Building query to exclude user:', req.user.id);
     
-    // Gender filter - only apply if explicitly requested
-    // Don't auto-filter by user preferences to show all profiles by default
+    // Gender filter: explicit ?gender=, or else match viewer's "seeking" preference (profile.preferences.lookingFor).
+    // Use gender=all or gender=both to browse everyone without applying saved preference.
     if (gender) {
-      where.gender = gender;
+      const raw = String(gender).toLowerCase();
+      const g = raw === 'man' ? 'male' : raw === 'woman' ? 'female' : raw;
+      if (g === 'both' || g === 'all') {
+        // no gender constraint
+      } else if (['male', 'female', 'other'].includes(g)) {
+        where.gender = g;
+      }
+    } else if (currentUser?.preferences?.lookingFor) {
+      const rawLf = String(currentUser.preferences.lookingFor).toLowerCase();
+      const lf = rawLf === 'man' ? 'male' : rawLf === 'woman' ? 'female' : rawLf;
+      if (lf === 'male' || lf === 'female') {
+        where.gender = lf;
+      }
     }
 
     // Age range filter - only apply if explicitly requested
