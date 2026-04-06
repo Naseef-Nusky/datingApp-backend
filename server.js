@@ -126,11 +126,25 @@ if (!process.env.PROXY_HANDLES_CORS) {
 }
 
 // Stripe webhook needs raw body for signature verification (must be before express.json)
-app.use('/api/credits/stripe-webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
+app.use(
+  '/api/credits/stripe-webhook',
+  express.raw({ type: 'application/json', limit: '2mb' }),
+  handleStripeWebhook
+);
 
-// Allow large JSON/form bodies (profile payloads, etc.). Multipart uploads use multer per-route.
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+// JSON / urlencoded only — never buffer multipart bodies here (avoids raw-body 413 before multer runs).
+const jsonParser = express.json({ limit: '50mb' });
+const urlencodedParser = express.urlencoded({ extended: true, limit: '50mb' });
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) {
+    return next();
+  }
+  jsonParser(req, res, (err) => {
+    if (err) return next(err);
+    urlencodedParser(req, res, next);
+  });
+});
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

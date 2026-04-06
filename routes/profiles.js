@@ -33,7 +33,10 @@ const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB — align with stories route & nginx `client_max_body_size`
+    fieldSize: 5 * 1024 * 1024, // text fields in the same multipart request
+  },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
