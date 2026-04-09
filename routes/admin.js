@@ -340,7 +340,7 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
 // @access  Superadmin or Viewer
 router.get('/users', protect, admin, async (req, res) => {
   try {
-    const { filter, type } = req.query;
+    const { filter, type, gender } = req.query;
 
     const andParts = [];
     andParts.push({
@@ -387,14 +387,23 @@ router.get('/users', protect, admin, async (req, res) => {
 
     const whereClause = andParts.length > 1 ? { [Op.and]: andParts } : andParts[0];
 
+    const profileInclude = {
+      model: Profile,
+      as: 'profile',
+      attributes: ['firstName', 'lastName', 'age', 'gender', 'photos', 'isOnline', 'lastSeen'],
+    };
+
+    const normalizedGender = typeof gender === 'string' ? gender.trim().toLowerCase() : '';
+    if (['male', 'female', 'other'].includes(normalizedGender)) {
+      profileInclude.where = { gender: normalizedGender };
+      // When filtering by gender, require a matching profile row.
+      profileInclude.required = true;
+    }
+
     const users = await User.findAll({
       where: whereClause,
       include: [
-        {
-          model: Profile,
-          as: 'profile',
-          attributes: ['firstName', 'lastName', 'age', 'gender', 'photos', 'isOnline', 'lastSeen'],
-        },
+        profileInclude,
       ],
       attributes: [
         'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
@@ -843,11 +852,11 @@ router.delete('/users', protect, superadmin, async (req, res) => {
 });
 
 // @route   GET /api/admin/profiles
-// @desc    List profiles for CRM (regular users + streamers). filter: all|verified|unverified|active|inactive
+// @desc    List profiles for CRM (regular users + streamers). filter: all|verified|unverified|active|inactive. gender: male|female|other (optional)
 // @access  Admin only
 router.get('/profiles', protect, admin, async (req, res) => {
   try {
-    const { filter } = req.query;
+    const { filter, gender } = req.query;
     const whereUser = {
       userType: { [Op.in]: ['regular', 'streamer', 'talent'] },
     };
@@ -856,9 +865,23 @@ router.get('/profiles', protect, admin, async (req, res) => {
     else if (filter === 'verified') whereUser.isVerified = true;
     else if (filter === 'unverified') whereUser.isVerified = false;
 
+    const normalizedGender = typeof gender === 'string' ? gender.trim().toLowerCase() : '';
+    const profileWhere = {};
+    if (['male', 'female', 'other'].includes(normalizedGender)) {
+      profileWhere.gender = normalizedGender;
+    }
+
     const users = await User.findAll({
       where: whereUser,
-      include: [{ model: Profile, as: 'profile', required: true, attributes: ['userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'location', 'isOnline', 'lastSeen'] }],
+      include: [
+        {
+          model: Profile,
+          as: 'profile',
+          required: true,
+          ...(Object.keys(profileWhere).length > 0 && { where: profileWhere }),
+          attributes: ['userId', 'firstName', 'lastName', 'age', 'gender', 'photos', 'bio', 'location', 'isOnline', 'lastSeen'],
+        },
+      ],
       attributes: ['id', 'email', 'userType', 'isActive', 'isVerified', 'credits', 'subscriptionPlan', 'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill', 'createdAt'],
       order: [['createdAt', 'DESC']],
     });
@@ -1175,11 +1198,12 @@ router.get('/users/stats', protect, admin, async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const NON_ADMIN_USER_TYPES = ['superadmin', 'admin', 'moderator', 'viewer'];
 
     const totalUsers = await User.count({
       where: {
         userType: {
-          [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
+          [Op.notIn]: NON_ADMIN_USER_TYPES,
         },
       },
     });
@@ -1187,7 +1211,7 @@ router.get('/users/stats', protect, admin, async (req, res) => {
     const activeUsers = await User.count({
       where: {
         userType: {
-          [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
+          [Op.notIn]: NON_ADMIN_USER_TYPES,
         },
         isActive: true,
       },
@@ -1196,7 +1220,7 @@ router.get('/users/stats', protect, admin, async (req, res) => {
     const verifiedUsers = await User.count({
       where: {
         userType: {
-          [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
+          [Op.notIn]: NON_ADMIN_USER_TYPES,
         },
         isVerified: true,
       },
@@ -1205,7 +1229,7 @@ router.get('/users/stats', protect, admin, async (req, res) => {
     const newUsersToday = await User.count({
       where: {
         userType: {
-          [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'],
+          [Op.notIn]: NON_ADMIN_USER_TYPES,
         },
         createdAt: {
           [Op.gte]: today,
@@ -1213,11 +1237,43 @@ router.get('/users/stats', protect, admin, async (req, res) => {
       },
     });
 
+    // Profile gender split (profiles are 1:1 with users via userId)
+    const maleProfiles = await Profile.count({
+      where: { gender: 'male' },
+      include: [
+        {
+          model: User,
+          as: 'user',
+          required: true,
+          attributes: [],
+          where: {
+            userType: { [Op.notIn]: NON_ADMIN_USER_TYPES },
+          },
+        },
+      ],
+    });
+    const femaleProfiles = await Profile.count({
+      where: { gender: 'female' },
+      include: [
+        {
+          model: User,
+          as: 'user',
+          required: true,
+          attributes: [],
+          where: {
+            userType: { [Op.notIn]: NON_ADMIN_USER_TYPES },
+          },
+        },
+      ],
+    });
+
     res.json({
       totalUsers,
       activeUsers,
       verifiedUsers,
       newUsersToday,
+      maleProfiles,
+      femaleProfiles,
     });
   } catch (error) {
     console.error('Error fetching user stats:', error);
