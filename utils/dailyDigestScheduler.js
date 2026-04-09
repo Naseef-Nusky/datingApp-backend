@@ -33,7 +33,8 @@ const calculateDailyStats = async (userId, startDate, endDate) => {
         messageType: {
           [Op.in]: ['text', 'email'],
         },
-        createdAt: {
+        // Message model uses snake_case timestamp attribute/column.
+        created_at: {
           [Op.between]: [startDate, endDate],
         },
       },
