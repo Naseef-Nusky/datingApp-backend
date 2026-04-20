@@ -130,7 +130,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, password, firstName, lastName, age, gender } = req.body;
+      const { email, password, firstName, lastName, age, gender, lifestyle } = req.body;
 
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
@@ -178,6 +178,7 @@ router.post(
           age,
           gender,
           location,
+          lifestyle: lifestyle && typeof lifestyle === 'object' && !Array.isArray(lifestyle) ? lifestyle : {},
           // Mark as chat ready - they'll be registered when they first open chat or when someone chats with them
           chatRegisteredAt: new Date(), // Pre-mark as registered so they can chat immediately
         },

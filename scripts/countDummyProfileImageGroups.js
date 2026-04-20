@@ -60,7 +60,7 @@ function collectGroups(imageFiles) {
 }
 
 function main() {
-  const imagesDirArg = process.argv[2] || './scripts/dummy-images';
+  const imagesDirArg = process.argv[2] || './scripts/dummy-images-man';
   const absImagesDir = path.isAbsolute(imagesDirArg) ? imagesDirArg : path.join(process.cwd(), imagesDirArg);
 
   if (!fs.existsSync(absImagesDir)) {

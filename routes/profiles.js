@@ -605,6 +605,28 @@ router.put('/me', protect, async (req, res) => {
       updates.location.isAutoDetected = false;
     }
 
+    // Merge nested JSON fields so partial updates do not erase existing values
+    if (updates.location && typeof updates.location === 'object' && !Array.isArray(updates.location)) {
+      updates.location = {
+        ...(profile.location || {}),
+        ...updates.location,
+      };
+    }
+
+    if (updates.lifestyle && typeof updates.lifestyle === 'object' && !Array.isArray(updates.lifestyle)) {
+      updates.lifestyle = {
+        ...(profile.lifestyle || {}),
+        ...updates.lifestyle,
+      };
+    }
+
+    if (updates.preferences && typeof updates.preferences === 'object' && !Array.isArray(updates.preferences)) {
+      updates.preferences = {
+        ...(profile.preferences || {}),
+        ...updates.preferences,
+      };
+    }
+
     await profile.update(updates);
 
     res.json(profile);
