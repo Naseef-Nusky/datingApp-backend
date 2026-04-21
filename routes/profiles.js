@@ -249,7 +249,10 @@ router.get('/', protect, async (req, res) => {
 
     const parseHeightCm = (value) => {
       if (!value) return null;
-      const n = parseInt(value, 10);
+      const raw = String(value).trim();
+      const cmMatch = raw.match(/\((\d+)\s*cm\)/i) || raw.match(/(\d+)\s*cm/i);
+      if (cmMatch) return parseInt(cmMatch[1], 10);
+      const n = parseInt(raw, 10);
       return Number.isNaN(n) ? null : n;
     };
 
@@ -572,6 +575,9 @@ router.get('/:id', protect, async (req, res) => {
 router.put('/me', protect, async (req, res) => {
   try {
     const updates = req.body;
+    const currentUser = await User.findByPk(req.user.id, {
+      attributes: ['id', 'userType', 'registrationComplete'],
+    });
     let profile = await Profile.findOne({ where: { userId: req.user.id } });
 
     // If profile is missing (legacy/incomplete account), create one so onboarding can continue.
@@ -595,8 +601,16 @@ router.put('/me', protect, async (req, res) => {
       });
     }
     
-    // Regular users cannot change location (unless streamer/talent)
-    if (updates.location && req.user.userType === 'regular') {
+    // Regular users can set location only while completing onboarding.
+    // After registration is complete, only streamer/talent can update location.
+    const canRegularUserSetLocationDuringOnboarding =
+      req.user.userType === 'regular' && currentUser?.registrationComplete === false;
+
+    if (
+      updates.location &&
+      req.user.userType === 'regular' &&
+      !canRegularUserSetLocationDuringOnboarding
+    ) {
       delete updates.location;
     }
 

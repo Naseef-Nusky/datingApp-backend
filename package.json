@@ -9,6 +9,7 @@
     "dev": "nodemon server.js",
     "seed": "node scripts/seedUsers.js",
     "backfill-zodiac": "node scripts/backfillZodiac.js",
+    "randomize-usa-cities": "node scripts/randomizeUsaCities.js",
     "create-admin": "node scripts/createAdmin.js",
     "update-superadmin": "node scripts/updateToSuperAdmin.js",
     "import-dummy-profiles": "node scripts/importDummyProfilesFromCsv.js",
