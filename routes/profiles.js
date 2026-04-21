@@ -57,10 +57,13 @@ router.get('/', protect, async (req, res) => {
       maxAge,
       city,
       country,
+      location,
       limit = 20,
       page = 1,
       videoChat,
       zodiacSigns,
+      zodiac,
+      zodiacFilter,
       interests,
       education,
       languages,
@@ -75,6 +78,8 @@ router.get('/', protect, async (req, res) => {
       hair,
       compatibleZodiacOnly,
     } = req.query;
+
+    console.log('[Browse Search] Incoming query:', req.query);
     
     // Check if current user has a profile
     const currentUser = await Profile.findOne({ where: { userId: req.user.id } });
@@ -118,25 +123,54 @@ router.get('/', protect, async (req, res) => {
       if (maxAge) where.age[Op.lte] = parseInt(maxAge);
     }
 
-    // Location filters - using JSONB path queries for PostgreSQL
-    if (city || country) {
+    // Location filters.
+    // - `location` (single input): match city OR country.
+    // - `city` + `country` (explicit fields): both are combined with AND.
+    if (location || city || country) {
+      const normalizeLocationTerm = (value) =>
+        String(value || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .replace(/'/g, "''")
+          .toLowerCase();
+
       const locationConditions = [];
-      if (city) {
+      if (location && String(location).trim()) {
+        const normalizedLocation = normalizeLocationTerm(location);
+        locationConditions.push({
+          [Op.or]: [
+            sequelize.literal(
+              `regexp_replace(lower(coalesce("location"->>'city', '')), '\\s+', ' ', 'g') LIKE '%${normalizedLocation}%'`
+            ),
+            sequelize.literal(
+              `regexp_replace(lower(coalesce("location"->>'country', '')), '\\s+', ' ', 'g') LIKE '%${normalizedLocation}%'`
+            ),
+          ],
+        });
+      }
+
+      if (city && String(city).trim()) {
+        const normalizedCity = normalizeLocationTerm(city);
         locationConditions.push(
-          sequelize.literal(`"location"->>'city' ILIKE '%${city.replace(/'/g, "''")}%'`)
+          sequelize.literal(
+            `regexp_replace(lower(coalesce("location"->>'city', '')), '\\s+', ' ', 'g') LIKE '%${normalizedCity}%'`
+          )
         );
       }
-      if (country) {
+      if (country && String(country).trim()) {
+        const normalizedCountry = normalizeLocationTerm(country);
         locationConditions.push(
-          sequelize.literal(`"location"->>'country' ILIKE '%${country.replace(/'/g, "''")}%'`)
+          sequelize.literal(
+            `regexp_replace(lower(coalesce("location"->>'country', '')), '\\s+', ' ', 'g') LIKE '%${normalizedCountry}%'`
+          )
         );
       }
       if (locationConditions.length > 0) {
-        // Use OR for location - match if city OR country matches
+        // Use AND so all provided location constraints are respected.
         if (where[Op.and]) {
-          where[Op.and].push({ [Op.or]: locationConditions });
+          where[Op.and].push(...locationConditions);
         } else {
-          where[Op.or] = locationConditions;
+          where[Op.and] = [...locationConditions];
         }
       }
     }
@@ -149,7 +183,9 @@ router.get('/', protect, async (req, res) => {
       );
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+    const offset = (pageNum - 1) * limitNum;
     
     console.log('Query where clause:', JSON.stringify(where, null, 2));
     console.log('Current user ID:', req.user.id);
@@ -182,46 +218,84 @@ router.get('/', protect, async (req, res) => {
     const totalProfiles = await Profile.count();
     console.log(`Total profiles in database: ${totalProfiles}`);
     
-    const { count, rows: profiles } = await Profile.findAndCountAll({
+    const profiles = await Profile.findAll({
       where,
       include: includeForBrowse,
-      limit: parseInt(limit),
-      offset: offset,
       order: [['createdAt', 'DESC']],
-      distinct: true,
     });
 
-    console.log(`Found ${count} total profiles matching basic criteria`);
+    console.log(`Found ${profiles.length} total profiles matching basic criteria`);
 
     // -----------------------------
     // Advanced filters in Node.js
     // -----------------------------
-    const zodiacFilter = zodiacSigns ? zodiacSigns.split(',').map((z) => z.trim()).filter(Boolean) : [];
-    const interestsFilter = interests ? interests.split(',').map((i) => i.trim()).filter(Boolean) : [];
-    const languagesFilter = languages ? languages.split(',').map((l) => l.trim()).filter(Boolean) : [];
+    const normalizeText = (value) =>
+      String(value || '')
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ');
+
+    const zodiacSource = zodiacSigns || zodiac || zodiacFilter || '';
+    const zodiacFilterList = zodiacSource
+      ? String(zodiacSource).split(',').map((z) => normalizeText(z)).filter(Boolean)
+      : [];
+    const interestsFilter = interests ? interests.split(',').map((i) => normalizeText(i)).filter(Boolean) : [];
+    const languagesFilter = languages ? languages.split(',').map((l) => normalizeText(l)).filter(Boolean) : [];
+    console.log('[Browse Search] Parsed filters:', {
+      gender,
+      minAge,
+      maxAge,
+      city,
+      country,
+      location,
+      videoChat,
+      zodiacFilter: zodiacFilterList,
+      interestsFilter,
+      education,
+      languagesFilter,
+      relationship,
+      kids,
+      smoke,
+      drink,
+      minHeight,
+      maxHeight,
+      bodyType,
+      eyes,
+      hair,
+      compatibleZodiacOnly,
+      page: pageNum,
+      limit: limitNum,
+    });
 
     // Helper to map kids filter to boolean
     const mapKidsFilter = (value) => {
       if (!value) return null;
-      if (value === 'No kids') return false;
-      if (value === 'Have kids') return true;
+      const v = normalizeText(value);
+      if (v === 'no kids') return false;
+      if (v === 'have kids') return true;
       return null;
     };
 
-    // Helper to map smoke/drink filter to acceptable lifestyle values
+    const matchesNormalized = (left, right) =>
+      normalizeText(left) !== '' && normalizeText(left) === normalizeText(right);
+
+    // Helper to match smoke/drink values from either old or new option sets.
     const matchesFrequency = (filterValue, actual) => {
-      if (!filterValue || !actual) return true;
-      const val = actual.toLowerCase();
-      switch (filterValue) {
-        case 'Never':
-          return ['no', 'never', 'non-smoker', 'non-drinker', 'rarely'].some((k) => val.includes(k));
-        case 'Occasionally':
-          return ['occasionally', 'social', 'socially', 'rarely'].some((k) => val.includes(k));
-        case 'Regularly':
-          return ['regular', 'regularly', 'yes', 'daily'].some((k) => val.includes(k));
-        default:
-          return true;
-      }
+      if (!filterValue) return true;
+      if (!actual) return false;
+
+      const filter = normalizeText(filterValue);
+      const val = normalizeText(actual);
+
+      const yesSet = ['yes', 'regularly', 'regular', 'daily'];
+      const noSet = ['no', 'never', 'non-smoker', 'non-drinker'];
+      const maybeSet = ['sometimes', 'occasionally', 'social', 'socially', 'rarely'];
+
+      if (yesSet.includes(filter)) return yesSet.some((k) => val.includes(k));
+      if (noSet.includes(filter)) return noSet.some((k) => val.includes(k));
+      if (maybeSet.includes(filter)) return maybeSet.some((k) => val.includes(k));
+
+      return matchesNormalized(filter, val);
     };
 
     // Zodiac compatibility map (very simple version)
@@ -262,32 +336,31 @@ router.get('/', protect, async (req, res) => {
     const filteredProfiles = profiles.filter((profile) => {
       const lifestyle = profile.lifestyle || {};
 
-      // Interests (at least one in common)
+      // Interests (all selected interests must be present)
       if (interestsFilter.length > 0) {
         const userInterests = Array.isArray(profile.interests) ? profile.interests : [];
-        const hasCommonInterest = interestsFilter.some((i) =>
-          userInterests.map((ui) => ui.toLowerCase()).includes(i.toLowerCase())
-        );
-        if (!hasCommonInterest) return false;
+        const normalizedInterests = userInterests.map((ui) => normalizeText(ui));
+        const hasAllInterests = interestsFilter.every((i) => normalizedInterests.includes(i));
+        if (!hasAllInterests) return false;
       }
 
       // Education
-      if (education && lifestyle.education && lifestyle.education !== education) {
+      if (education && lifestyle.education && !matchesNormalized(lifestyle.education, education)) {
         return false;
       } else if (education && !lifestyle.education) {
         return false;
       }
 
-      // Languages (at least one match)
+      // Languages (all selected languages must be present)
       if (languagesFilter.length > 0) {
         const userLangs = Array.isArray(lifestyle.languages) ? lifestyle.languages : [];
-        const lowerLangs = userLangs.map((l) => l.toLowerCase());
-        const hasLang = languagesFilter.some((l) => lowerLangs.includes(l.toLowerCase()));
-        if (!hasLang) return false;
+        const normalizedLangs = userLangs.map((l) => normalizeText(l));
+        const hasAllLanguages = languagesFilter.every((l) => normalizedLangs.includes(l));
+        if (!hasAllLanguages) return false;
       }
 
       // Relationship
-      if (relationship && lifestyle.relationship !== relationship) {
+      if (relationship && !matchesNormalized(lifestyle.relationship, relationship)) {
         return false;
       }
 
@@ -318,14 +391,14 @@ router.get('/', protect, async (req, res) => {
       }
 
       // Body type / Eyes / Hair
-      if (bodyType && lifestyle.bodyType !== bodyType) return false;
-      if (eyes && lifestyle.eyes !== eyes) return false;
-      if (hair && lifestyle.hair !== hair) return false;
+      if (bodyType && !matchesNormalized(lifestyle.bodyType, bodyType)) return false;
+      if (eyes && !matchesNormalized(lifestyle.eyes, eyes)) return false;
+      if (hair && !matchesNormalized(lifestyle.hair, hair)) return false;
 
       // Zodiac signs explicit filter
-      if (zodiacFilter.length > 0) {
-        const userZodiac = (lifestyle.zodiac || '').toLowerCase();
-        if (!zodiacFilter.map((z) => z.toLowerCase()).includes(userZodiac)) {
+      if (zodiacFilterList.length > 0) {
+        const userZodiac = normalizeText(lifestyle.zodiac || '');
+        if (!zodiacFilterList.includes(userZodiac)) {
           return false;
         }
       }
@@ -347,9 +420,13 @@ router.get('/', protect, async (req, res) => {
       console.warn('No profiles returned after advanced filters but database has profiles. Filters might be too restrictive.');
     }
 
-    // Get user details for each profile
+    // Apply pagination AFTER advanced filters so zodiac and other filters
+    // are accurate across the entire matching dataset.
+    const paginatedProfiles = filteredProfiles.slice(offset, offset + limitNum);
+
+    // Get user details for each paginated profile
     const profilesWithUsers = await Promise.all(
-      filteredProfiles.map(async (profile) => {
+      paginatedProfiles.map(async (profile) => {
         try {
           const user = await User.findByPk(profile.userId, {
             attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
@@ -402,10 +479,10 @@ router.get('/', protect, async (req, res) => {
     res.json({
       profiles: profilesWithUsers,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: count,
-        pages: Math.ceil(count / parseInt(limit)),
+        page: pageNum,
+        limit: limitNum,
+        total: filteredProfiles.length,
+        pages: Math.ceil(filteredProfiles.length / limitNum),
       },
     });
   } catch (error) {
