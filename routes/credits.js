@@ -181,7 +181,7 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
     if (!stripe) {
       return res.status(503).json({ message: 'Stripe is not configured. Set STRIPE_SECRET_KEY in .env' });
     }
-    const { packId } = req.body;
+    const { packId, returnPath } = req.body;
     if (!packId) {
       return res.status(400).json({ message: 'Missing refill pack id' });
     }
@@ -214,6 +214,25 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
     const displayLabel = `${credits} Credits`;
     const priceId = await getOrCreateStripeRefillPrice(String(pack.id || packId), displayLabel, credits, amountCents);
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const getSafeReturnPath = () => {
+      if (typeof returnPath !== 'string' || !returnPath.startsWith('/')) {
+        return '/dashboard';
+      }
+      // Do not allow protocol-relative paths such as //evil-site.com
+      if (returnPath.startsWith('//')) {
+        return '/dashboard';
+      }
+      return returnPath;
+    };
+    const safeReturnPath = getSafeReturnPath();
+    const buildRedirectUrl = (status) => {
+      const redirectUrl = new URL(safeReturnPath, `${frontendUrl}/`);
+      redirectUrl.searchParams.set('refill', status);
+      if (status === 'success') {
+        redirectUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+      }
+      return redirectUrl.toString();
+    };
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
@@ -223,8 +242,8 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: `${frontendUrl}/dashboard?refill=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${frontendUrl}/dashboard?refill=cancelled`,
+      success_url: buildRedirectUrl('success'),
+      cancel_url: buildRedirectUrl('cancelled'),
       client_reference_id: String(req.user.id),
       metadata: {
         userId: String(req.user.id),

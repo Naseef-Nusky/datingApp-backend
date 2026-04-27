@@ -16,7 +16,15 @@
     "generate-dummy-man-csv": "node scripts/generateDummyManProfilesCsv.js",
     "create-dummy-man": "node scripts/createDummyManProfiles.js",
     "create-dummy-man-import": "node scripts/createDummyManProfiles.js --import",
-    "import-dummy-man": "node scripts/importDummyProfilesFromCsv.js ./scripts/dummy_profiles_man.csv \"./scripts/dummy images man\""
+    "import-dummy-man": "node scripts/importDummyProfilesFromCsv.js ./scripts/dummy_profiles_man.csv \"./scripts/dummy images man\"",
+    "update-profile-age": "node scripts/updateProfileAgePreferences.js",
+    "update-profile-age-dry": "node scripts/updateProfileAgePreferences.js --dry-run",
+    "update-seeking-men-age": "node scripts/updateProfileAgePreferences.js --seeking-men",
+    "update-seeking-men-age-dry": "node scripts/updateProfileAgePreferences.js --seeking-men --dry-run",
+    "update-opposite-sex-age": "node scripts/updateProfileAgePreferences.js --opposite-sex",
+    "update-opposite-sex-age-dry": "node scripts/updateProfileAgePreferences.js --opposite-sex --dry-run",
+    "set-seeking-by-gender": "node scripts/setSeekingByGender.js",
+    "set-seeking-by-gender-dry": "node scripts/setSeekingByGender.js --dry-run"
   },
   "keywords": [
     "dating",
