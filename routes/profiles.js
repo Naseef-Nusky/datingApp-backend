@@ -175,13 +175,8 @@ router.get('/', protect, async (req, res) => {
       }
     }
 
-    // Video chat filter (if implemented in preferences)
-    if (videoChat === 'true') {
-      where.preferences = sequelize.where(
-        sequelize.cast(sequelize.json('preferences.videoChat'), 'BOOLEAN'),
-        true
-      );
-    }
+    // Video chat filter: treat all profiles as video-chat available.
+    // Keep query flag for compatibility, but do not exclude profiles.
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 20;
