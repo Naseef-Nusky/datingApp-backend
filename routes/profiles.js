@@ -293,6 +293,15 @@ router.get('/', protect, async (req, res) => {
       return matchesNormalized(filter, val);
     };
 
+    const normalizeZodiacKey = (value) => {
+      const base = normalizeText(value || '').replace(/[^a-z]/g, '');
+      const aliases = {
+        arian: 'aries',
+        capricon: 'capricorn',
+      };
+      return aliases[base] || base;
+    };
+
     // Zodiac compatibility map (very simple version)
     const zodiacCompatibility = {
       aries: ['leo', 'sagittarius', 'gemini', 'aquarius'],
@@ -309,7 +318,7 @@ router.get('/', protect, async (req, res) => {
       pisces: ['cancer', 'scorpio', 'taurus', 'capricorn'],
     };
 
-    const currentUserZodiac = (currentUser?.lifestyle?.zodiac || '').toLowerCase();
+    const currentUserZodiac = normalizeZodiacKey(currentUser?.lifestyle?.zodiac || '');
     const compatibleSigns = compatibleZodiacOnly === 'true' && currentUserZodiac
       ? (zodiacCompatibility[currentUserZodiac] || [])
       : null;
@@ -392,7 +401,7 @@ router.get('/', protect, async (req, res) => {
 
       // Zodiac signs explicit filter
       if (zodiacFilterList.length > 0) {
-        const userZodiac = normalizeText(lifestyle.zodiac || '');
+        const userZodiac = normalizeZodiacKey(lifestyle.zodiac || '');
         if (!zodiacFilterList.includes(userZodiac)) {
           return false;
         }
@@ -400,7 +409,7 @@ router.get('/', protect, async (req, res) => {
 
       // Compatible zodiac only
       if (compatibleSigns && compatibleSigns.length > 0) {
-        const userZodiac = (lifestyle.zodiac || '').toLowerCase();
+        const userZodiac = normalizeZodiacKey(lifestyle.zodiac || '');
         if (!compatibleSigns.includes(userZodiac)) {
           return false;
         }
