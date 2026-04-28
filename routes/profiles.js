@@ -28,6 +28,27 @@ function getViewerPhotoUrl(profile) {
   return null;
 }
 
+// Rotating "visible online" state for browse/discovery views.
+// Keeps real online users online, and marks ~30% of others as online based on a time bucket.
+function hashString(value) {
+  const str = String(value || '');
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function getRotatingOnlineState(userId, realOnline, isDummyProfile) {
+  if (!isDummyProfile) return !!realOnline;
+  if (realOnline) return true;
+  // Rotate every 15 minutes.
+  const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
+  const score = hashString(`${userId}-${bucket}`) % 100;
+  return score < 30;
+}
+
 // Configure multer for memory storage (we'll upload directly to Spaces)
 const storage = multer.memoryStorage();
 
@@ -435,6 +456,10 @@ router.get('/', protect, async (req, res) => {
           const user = await User.findByPk(profile.userId, {
             attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
           });
+          const isDummyProfile =
+            typeof user?.email === 'string' &&
+            user.email.startsWith('dummy') &&
+            user.email.endsWith('@example.com');
           
           return {
             id: profile.id,
@@ -451,7 +476,7 @@ router.get('/', protect, async (req, res) => {
             lifestyle: profile.lifestyle || {},
             preferences: profile.preferences || {},
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
-            isOnline: profile.isOnline || false,
+            isOnline: getRotatingOnlineState(profile.userId, !!profile.isOnline, isDummyProfile),
             todayStatus: profile.todayStatus || null,
             user: user || null,
           };
@@ -472,7 +497,9 @@ router.get('/', protect, async (req, res) => {
             lifestyle: profile.lifestyle || {},
             preferences: profile.preferences || {},
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
-            isOnline: profile.isOnline || false,
+            // When user lookup fails, do not apply dummy rotation.
+            // Keep the real profile online state untouched.
+            isOnline: !!profile.isOnline,
             todayStatus: profile.todayStatus || null,
             user: null,
           };
