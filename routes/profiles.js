@@ -578,6 +578,15 @@ router.get('/:id', protect, async (req, res) => {
     const user = await User.findByPk(profile.userId, {
       attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
     });
+    const isDummyProfile =
+      typeof user?.email === 'string' &&
+      user.email.startsWith('dummy') &&
+      user.email.endsWith('@example.com');
+    const profileOnlineState = getRotatingOnlineState(
+      profile.userId,
+      !!profile.isOnline,
+      isDummyProfile
+    );
 
     // Increment profile views
     profile.profileViews += 1;
@@ -666,7 +675,7 @@ router.get('/:id', protect, async (req, res) => {
       lifestyle: profile.lifestyle || {},
       preferences: profile.preferences || {},
       wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
-      isOnline: profile.isOnline || false,
+      isOnline: profileOnlineState,
       todayStatus: profile.todayStatus || null,
       profileViews: profile.profileViews || 0,
       user: user || null,
