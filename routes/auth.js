@@ -10,6 +10,7 @@ import { sendLoginLinkEmail, sendUserOnlineNotificationEmail } from '../utils/em
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+import { ensureVerificationStateForUser } from '../utils/userCompliance.js';
 
 const router = express.Router();
 
@@ -287,6 +288,7 @@ router.post(
       if (!user) {
         return res.status(401).json({ message: 'Invalid username or password' });
       }
+      await ensureVerificationStateForUser(user);
 
       const isMatch = await user.matchPassword(password);
       if (!isMatch) {
@@ -337,6 +339,7 @@ router.post(
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
+      await ensureVerificationStateForUser(user);
       const isMatch = await user.matchPassword(req.body.password);
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
@@ -361,7 +364,15 @@ router.post(
       const token = generateToken(user.id, user.userType);
       res.json({
         token,
-        user: { id: user.id, email: user.email, userType: user.userType, credits: user.credits },
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+          credits: user.credits,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+          verificationExpiresAt: user.verificationExpiresAt,
+        },
       });
     } catch (error) {
       console.error('User login error:', error);
@@ -399,6 +410,7 @@ router.post(
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
+      await ensureVerificationStateForUser(user);
 
       // Check password
       const isMatch = await user.matchPassword(password);
@@ -431,6 +443,9 @@ router.post(
           email: user.email,
           userType: user.userType,
           credits: user.credits,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+          verificationExpiresAt: user.verificationExpiresAt,
         },
       });
     } catch (error) {
@@ -533,14 +548,21 @@ router.get('/location', async (req, res) => {
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    await ensureVerificationStateForUser(user);
     const profile = await Profile.findOne({ where: { userId: req.user.id } });
     res.json({
       user: {
-        id: req.user.id,
-        email: req.user.email,
-        userType: req.user.userType,
-        credits: req.user.credits,
-        subscriptionPlan: req.user.subscriptionPlan,
+        id: user.id,
+        email: user.email,
+        userType: user.userType,
+        credits: user.credits,
+        subscriptionPlan: user.subscriptionPlan,
+        isVerified: user.isVerified,
+        verificationStatus: user.verificationStatus,
+        verifiedAt: user.verifiedAt,
+        verificationExpiresAt: user.verificationExpiresAt,
       },
       profile,
     });
@@ -714,6 +736,7 @@ router.post(
         }
         return res.status(400).json({ message: 'Invalid login link. Request a new one.' });
       }
+      await ensureVerificationStateForUser(user);
 
       // Do not clear loginLinkToken: same link can be used multiple times. It is invalidated only when a new link is requested (send-login-link or Google).
       user.lastLogin = new Date();
@@ -751,6 +774,9 @@ router.post(
           email: user.email,
           userType: user.userType,
           credits: user.credits,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+          verificationExpiresAt: user.verificationExpiresAt,
         },
         profile: profile ? {
           firstName: profile.firstName,

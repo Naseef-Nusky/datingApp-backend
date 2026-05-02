@@ -33,6 +33,31 @@ const User = sequelize.define(
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    verificationStatus: {
+      type: DataTypes.ENUM('pending', 'verified', 'reverify_required', 'rejected'),
+      defaultValue: 'pending',
+      field: 'verification_status',
+    },
+    verificationProvider: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'verification_provider',
+    },
+    verifiedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'verified_at',
+    },
+    verificationExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'verification_expires_at',
+    },
+    reverifyRequiredAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reverify_required_at',
+    },
     verificationToken: {
       type: DataTypes.STRING,
       allowNull: true,

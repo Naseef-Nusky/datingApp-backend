@@ -18,6 +18,7 @@ import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../u
 import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings } from '../utils/creditSettings.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
+import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 
 const router = express.Router();
 
@@ -132,6 +133,11 @@ router.post('/', protect, async (req, res) => {
 
     if (isBlocked) {
       return res.status(403).json({ message: 'Cannot send message: User is blocked' });
+    }
+
+    const restriction = await checkFreeToFreeRestriction(req.user.id, receiverId);
+    if (!restriction.allowed) {
+      return res.status(403).json({ message: restriction.message });
     }
 
     // Find or create chat - allow direct messaging without request
@@ -983,6 +989,11 @@ router.post('/chat-requests', protect, async (req, res) => {
 
     if (isBlocked) {
       return res.status(403).json({ message: 'Cannot send chat request: User is blocked' });
+    }
+
+    const restriction = await checkFreeToFreeRestriction(req.user.id, receiverId);
+    if (!restriction.allowed) {
+      return res.status(403).json({ message: restriction.message });
     }
 
     // Check if chat already exists
@@ -1930,6 +1941,11 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
 
     if (isBlocked) {
       return res.status(403).json({ message: 'Cannot send email: User is blocked' });
+    }
+
+    const restriction = await checkFreeToFreeRestriction(req.user.id, receiverId);
+    if (!restriction.allowed) {
+      return res.status(403).json({ message: restriction.message });
     }
 
     // Get sender user with profile for email notification

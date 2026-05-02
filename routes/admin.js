@@ -31,6 +31,7 @@ import bcrypt from 'bcryptjs';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
+import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -409,6 +410,7 @@ router.get('/users', protect, admin, async (req, res) => {
         'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
         'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
         'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill',
+        'verificationStatus', 'verifiedAt', 'verificationExpiresAt', 'reverifyRequiredAt', 'verificationProvider',
       ],
       order: [['createdAt', 'DESC']],
     });
@@ -468,7 +470,8 @@ router.post(
         email: email.toLowerCase().trim(),
         password: passwordToSet, // Will be hashed by User model hooks
         userType: 'regular',
-        isVerified: true,
+        // Real users should also start unverified unless explicitly verified later.
+        isVerified: false,
         isActive: true,
         isAdminCreated: true,
         registrationComplete: true,
@@ -558,7 +561,9 @@ router.post(
         email: email.toLowerCase().trim(),
         password: passwordToSet,
         userType: 'streamer',
-        isVerified: true,
+        // New streamers should not be auto-verified.
+        // Verification must be granted explicitly from CRM moderation flow.
+        isVerified: false,
         isActive: true,
         isAdminCreated: true,
         registrationComplete: true,
@@ -646,9 +651,13 @@ router.put('/users/:id/toggle-active', protect, superadmin, async (req, res) => 
 
 // @route   PUT /api/admin/users/:id/toggle-verified
 // @desc    Toggle user verified status
-// @access  Superadmin only
-router.put('/users/:id/toggle-verified', protect, superadmin, async (req, res) => {
+// @access  Superadmin or Viewer
+router.put('/users/:id/toggle-verified', protect, admin, async (req, res) => {
   try {
+    if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+      return res.status(403).json({ message: 'You do not have permission to toggle verification' });
+    }
+
     const { id } = req.params;
     const { isVerified } = req.body;
 
@@ -664,14 +673,21 @@ router.put('/users/:id/toggle-verified', protect, superadmin, async (req, res) =
       return res.status(400).json({ message: 'Cannot toggle verification of admin users' });
     }
 
-    user.isVerified = isVerified !== undefined ? isVerified : !user.isVerified;
-    await user.save();
+    const shouldVerify = isVerified !== undefined ? Boolean(isVerified) : !user.isVerified;
+    if (shouldVerify) {
+      await markUserVerified(user, { provider: 'crm_manual' });
+    } else {
+      await markUserUnverified(user, 'manual_unverify');
+    }
 
     res.json({
       message: 'User verification status updated successfully',
       user: {
         id: user.id,
         isVerified: user.isVerified,
+        verificationStatus: user.verificationStatus,
+        verifiedAt: user.verifiedAt,
+        verificationExpiresAt: user.verificationExpiresAt,
       },
     });
   } catch (error) {

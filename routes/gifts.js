@@ -3,6 +3,7 @@ import { Op } from 'sequelize';
 import { User, GiftCatalog, Gift, CreditTransaction, Notification, Chat, Message, PresentCategory } from '../models/index.js';
 import { protect } from '../middleware/auth.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
+import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 
 const router = express.Router();
 
@@ -82,6 +83,11 @@ router.post('/send', protect, async (req, res) => {
 
     const creditCost = parseInt(giftItem.creditCost, 10) || 0;
     const senderId = req.user.id;
+
+    const restriction = await checkFreeToFreeRestriction(senderId, receiverId);
+    if (!restriction.allowed) {
+      return res.status(403).json({ message: restriction.message });
+    }
 
     // Streamers/talents should NOT be forced to pay credits.
     // Only real users (regular) get charged when sending gifts.
