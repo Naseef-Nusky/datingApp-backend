@@ -635,7 +635,10 @@ router.post('/resend-verification', [body('email').isEmail()], async (req, res) 
 // @access  Public
 router.post(
   '/send-login-link',
-  [body('email').isEmail().normalizeEmail()],
+  [
+    body('email').isEmail().normalizeEmail(),
+    body('linkDelivery').optional().isIn(['web', 'ios-native']),
+  ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -644,7 +647,8 @@ router.post(
       }
 
       const normalizedEmail = req.body.email.toLowerCase().trim();
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const linkDelivery = req.body.linkDelivery === 'ios-native' ? 'ios-native' : 'web';
 
       let user = await User.findOne({
         where: { email: { [Op.iLike]: normalizedEmail } },
@@ -678,7 +682,20 @@ router.post(
         { where: { id: user.id } }
       );
 
-      const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+      let loginUrl;
+      if (linkDelivery === 'ios-native') {
+        const rawScheme = process.env.IOS_APP_LOGIN_SCHEME || 'com.vantagedating.app';
+        const scheme = String(rawScheme)
+          .trim()
+          .replace(/:$/, '')
+          .replace(/^\/+/, '');
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(scheme)) {
+          return res.status(500).json({ message: 'Invalid IOS_APP_LOGIN_SCHEME server configuration.' });
+        }
+        loginUrl = `${scheme}://auth/login-callback?token=${rawToken}`;
+      } else {
+        loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+      }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
       const emailResult = await sendLoginLinkEmail(normalizedEmail, firstName, loginUrl, user.id);

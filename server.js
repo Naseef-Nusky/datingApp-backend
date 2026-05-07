@@ -48,6 +48,7 @@ const PRODUCTION_ORIGINS = [
   'https://www.vantagedating.com',
   'https://crm.vantagedating.com',
   'https://app.vantagedating.com',
+  'https://api.vantagedating.com',
 ];
 const DEV_ORIGINS = [
   'http://localhost:3000',
@@ -75,11 +76,18 @@ const getAllowedOrigins = () => {
 };
 const allowedOrigins = getAllowedOrigins();
 
+// Capacitor / Cordova WebViews use custom schemes — not http(s) site origins
+const CAPACITOR_NATIVE_ORIGINS = [
+  'capacitor://localhost',
+  'ionic://localhost',
+  'https://localhost', // Capacitor Android when server.androidScheme is https
+];
+
 const app = express();
 const httpServer = createServer(app);
 const io = new SocketServer(httpServer, {
   cors: {
-    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
+    origin: [...new Set([...allowedOrigins, ...CAPACITOR_NATIVE_ORIGINS])],
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -91,15 +99,19 @@ const io = new SocketServer(httpServer, {
   upgradeTimeout: 10000, // Upgrade timeout
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 const HOST = process.env.HOST || '0.0.0.0';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Middleware: CORS. Set PROXY_HANDLES_CORS=1 if your proxy/CDN adds CORS headers to avoid duplicate header error.
+// Middleware: CORS. Set PROXY_HANDLES_CORS=1 in production only if your proxy/CDN sends CORS headers (avoids duplicates).
+// Locally, keep this off (or leave NODE_ENV≠production): otherwise the browser gets no Access-Control-Allow-* on preflight.
+const proxyHandlesCors =
+  process.env.PROXY_HANDLES_CORS === '1' || process.env.PROXY_HANDLES_CORS === 'true';
+const skipExpressCors = proxyHandlesCors && process.env.NODE_ENV === 'production';
 // In development, also allow any http://localhost:* origin so additional Vite dev servers (e.g. landing page) work.
-if (!process.env.PROXY_HANDLES_CORS) {
+if (!skipExpressCors) {
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -111,16 +123,44 @@ if (!process.env.PROXY_HANDLES_CORS) {
           return callback(null, true);
         }
 
+        // Private LAN dev only (e.g. simulator hitting http://MAC_IP:port — some stacks echo that Origin)
+        if (
+          process.env.NODE_ENV !== 'production' &&
+          /^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/i.test(origin)
+        ) {
+          return callback(null, true);
+        }
+
+        // Capacitor / Ionic native shell (iOS WKWebView, Android WebView)
+        if (
+          origin.startsWith('capacitor://') ||
+          origin.startsWith('ionic://') ||
+          origin === 'https://localhost'
+        ) {
+          return callback(null, true);
+        }
+
         // Otherwise fall back to the computed allowedOrigins list
         if (allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
 
-        return callback(new Error(`Not allowed by CORS: ${origin}`));
+        if (process.env.DEBUG_CORS === '1' || process.env.DEBUG_CORS === 'true') {
+          console.warn('[CORS] blocked Origin:', origin);
+        }
+        // Use (null, false) so the response is not treated as a server error without CORS headers
+        return callback(null, false);
       },
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'X-Requested-With',
+        'Baggage',
+        'sentry-trace',
+      ],
     })
   );
 }
