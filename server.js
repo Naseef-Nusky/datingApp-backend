@@ -19,6 +19,7 @@ import { Op } from 'sequelize';
 import { getCreditSettings } from './utils/creditSettings.js';
 import { sendOnlineNotification } from './utils/sendgridService.js';
 import { updateUserSpendAndVip } from './utils/vip.js';
+import { checkFreeToFreeRestriction, expireVerificationSweep, enforceFreeUserEligibilitySweep } from './utils/userCompliance.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -288,6 +289,12 @@ io.on('connection', (socket) => {
     const receiverId = String(data.receiverId);
     const callerId = String(data.callerId);
     const roomName = `user-${receiverId}`;
+
+    const restriction = await checkFreeToFreeRestriction(callerId, receiverId);
+    if (!restriction.allowed) {
+      socket.emit('call-request-error', { message: restriction.message });
+      return;
+    }
     
     console.log(`🔍 [SERVER] Looking for receiver in room: ${roomName}`);
     
@@ -792,6 +799,23 @@ const startServer = async () => {
     } catch (error) {
       console.warn('⚠️ Could not start daily digest scheduler:', error.message);
     }
+
+    // Compliance scheduler: verification expiry + free user eligibility checks
+    const runComplianceSweep = async () => {
+      try {
+        const [verificationResult, freeUserResult] = await Promise.all([
+          expireVerificationSweep(),
+          enforceFreeUserEligibilitySweep(),
+        ]);
+        console.log(
+          `✅ Compliance sweep complete: expired verifications=${verificationResult.expired}, free-user downgrades=${freeUserResult.downgraded}`
+        );
+      } catch (error) {
+        console.error('❌ Compliance sweep failed:', error.message);
+      }
+    };
+    runComplianceSweep();
+    setInterval(runComplianceSweep, 6 * 60 * 60 * 1000);
 
     // Start server
     httpServer.listen(PORT, HOST, () => {

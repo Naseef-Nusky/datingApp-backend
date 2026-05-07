@@ -583,6 +583,8 @@ router.post(
         preferences: {
           lookingFor: seeking || 'both',
           description: typeof idealPartner === 'string' ? idealPartner : '',
+          // Streamers are created with video chat off by default from CRM.
+          videoChat: false,
         },
       });
 
