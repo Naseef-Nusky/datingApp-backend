@@ -5,6 +5,8 @@ import Profile from '../models/Profile.js';
 export const VERIFICATION_VALIDITY_DAYS = 180;
 const FREE_USER_INACTIVE_DAYS = 30;
 
+const STAFF_USER_TYPES = new Set(['admin', 'superadmin', 'moderator', 'viewer']);
+
 export const getVerificationExpiryDate = (fromDate = new Date()) => {
   const d = new Date(fromDate);
   d.setDate(d.getDate() + VERIFICATION_VALIDITY_DAYS);
@@ -25,19 +27,87 @@ export const markUserVerified = async (user, options = {}) => {
 
 export const markUserUnverified = async (user, reason = 'manual_unverify') => {
   user.isVerified = false;
-  user.verificationStatus = reason === 'expired' ? 'reverify_required' : 'pending';
-  user.reverifyRequiredAt = new Date();
+  if (reason === 'expired') {
+    user.verificationStatus = 'reverify_required';
+    user.reverifyRequiredAt = user.reverifyRequiredAt || new Date();
+  } else if (reason === 'manual_unverify') {
+    user.verificationStatus = 'pending';
+    user.verifiedAt = null;
+    user.verificationExpiresAt = null;
+    user.verificationProvider = null;
+    user.reverifyRequiredAt = new Date();
+  } else {
+    user.verificationStatus = 'pending';
+    user.reverifyRequiredAt = new Date();
+  }
   await user.save();
   return user;
 };
 
+/** Aligns persisted verification fields with expiry and repairs inconsistent verified flags before auth/API use. */
 export const ensureVerificationStateForUser = async (user) => {
   if (!user) return user;
-  if (!user.isVerified) return user;
-  if (!user.verificationExpiresAt) return user;
-  if (new Date(user.verificationExpiresAt) > new Date()) return user;
-  await markUserUnverified(user, 'expired');
+
+  const now = new Date();
+
+  if (user.isVerified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) <= now) {
+    await markUserUnverified(user, 'expired');
+    return user;
+  }
+
+  const stillValidVerified =
+    user.verificationStatus === 'verified' &&
+    (!user.verificationExpiresAt || new Date(user.verificationExpiresAt) >= now);
+
+  if (stillValidVerified && user.isVerified === false) {
+    user.isVerified = true;
+    if (!user.verifiedAt) user.verifiedAt = now;
+    await user.save();
+  }
+
   return user;
+};
+
+function isElevatedParticipant(u) {
+  if (!u) return false;
+  if (u.userType === 'streamer' || u.userType === 'talent') return true;
+  if (u.subscriptionPlan && u.subscriptionPlan !== 'free') return true;
+  if (u.vipActive === true) return true;
+  if (u.isFreeUser === false) return true;
+  return false;
+}
+
+/**
+ * Blocks staff from member messaging endpoints; blocks free ↔ free messaging/gifting unless
+ * a participant is subscribed, VIP, or a creator (streamer/talent).
+ */
+export const checkFreeToFreeRestriction = async (senderId, receiverId) => {
+  const [sender, receiver] = await Promise.all([
+    User.findByPk(senderId, {
+      attributes: ['id', 'userType', 'subscriptionPlan', 'vipActive', 'isFreeUser'],
+    }),
+    User.findByPk(receiverId, {
+      attributes: ['id', 'userType', 'subscriptionPlan', 'vipActive', 'isFreeUser'],
+    }),
+  ]);
+
+  if (!sender || !receiver) {
+    return { allowed: false, message: 'User not found' };
+  }
+
+  if (STAFF_USER_TYPES.has(sender.userType) || STAFF_USER_TYPES.has(receiver.userType)) {
+    return { allowed: false, message: 'Admin communication is restricted via this endpoint' };
+  }
+
+  if (isElevatedParticipant(sender) || isElevatedParticipant(receiver)) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    message:
+      'Free members can only message or send gifts to subscribers, VIP members, or creators. Upgrade your plan to continue.',
+  };
 };
 
 export const enforceFreeUserEligibilitySweep = async () => {
@@ -81,25 +151,4 @@ export const expireVerificationSweep = async () => {
   }
 
   return { expired: users.length };
-};
-
-export const checkFreeToFreeRestriction = async (senderId, receiverId) => {
-  const users = await User.findAll({
-    where: { id: { [Op.in]: [senderId, receiverId] } },
-    attributes: ['id', 'isFreeUser', 'userType'],
-  });
-  if (users.length !== 2) {
-    return { allowed: false, message: 'User not found' };
-  }
-  const [a, b] = users;
-  const isParticipantAdmin = ['superadmin', 'admin', 'moderator', 'viewer'].includes(a.userType) || ['superadmin', 'admin', 'moderator', 'viewer'].includes(b.userType);
-  if (isParticipantAdmin) return { allowed: false, message: 'Admin communication is restricted via this endpoint' };
-
-  if (a.isFreeUser && b.isFreeUser) {
-    return {
-      allowed: false,
-      message: 'Free Users cannot contact other Free Users. Contact a Paying Member instead.',
-    };
-  }
-  return { allowed: true };
 };
