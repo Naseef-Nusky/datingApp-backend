@@ -1,13 +1,32 @@
 import sgMail from '@sendgrid/mail';
+import sendgridPkg from '@sendgrid/client';
+import https from 'node:https';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** Corporate proxy / antivirus HTTPS inspection breaks Node's chain to api.sendgrid.com. Prefer NODE_EXTRA_CA_CERTS. */
+const sendgridTlsInsecure =
+  process.env.SENDGRID_TLS_REJECT_UNAUTHORIZED === '0' ||
+  process.env.SENDGRID_TLS_REJECT_UNAUTHORIZED === 'false';
+
 // Initialize SendGrid
 if (process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  if (sendgridTlsInsecure) {
+    console.warn(
+      '[SendGrid] SENDGRID_TLS_REJECT_UNAUTHORIZED=false: TLS verification disabled for SendGrid API only. ' +
+        'Add your proxy CA via NODE_EXTRA_CA_CERTS when possible.'
+    );
+    const Client = sendgridPkg.Client;
+    const client = new Client();
+    client.setApiKey(process.env.SENDGRID_API_KEY);
+    client.setDefaultRequest('httpsAgent', new https.Agent({ rejectUnauthorized: false }));
+    sgMail.setClient(client);
+  } else {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  }
 }
 
 // Get FROM email - must be verified in SendGrid (use your own domain to reduce spam)

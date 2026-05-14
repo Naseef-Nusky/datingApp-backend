@@ -7,6 +7,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
 import {
+  sequelize,
   User,
   Profile,
   Report,
@@ -422,6 +423,304 @@ router.get('/users', protect, admin, async (req, res) => {
   }
 });
 
+const parseCrmInterests = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const p = JSON.parse(String(raw));
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+};
+
+const CRM_GENDERS = new Set(['male', 'female', 'other']);
+const CRM_SEEKING = new Set(['male', 'female', 'both']);
+
+/** CRM multipart/JSON: trim, lowercase, first duplicate field, buffers; map common aliases. */
+const normalizeCrmGender = (raw) => {
+  if (raw == null || raw === '') return null;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  const s = Buffer.isBuffer(first)
+    ? first.toString('utf8').trim().toLowerCase()
+    : String(first).trim().toLowerCase();
+  if (CRM_GENDERS.has(s)) return s;
+  if (s === 'man' || s === 'm' || s === 'guy') return 'male';
+  if (s === 'woman' || s === 'w' || s === 'girl' || s === 'lady') return 'female';
+  return null;
+};
+
+const normalizeCrmSeeking = (raw) => {
+  if (raw == null || raw === '') return null;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  const s = Buffer.isBuffer(first)
+    ? first.toString('utf8').trim().toLowerCase()
+    : String(first).trim().toLowerCase();
+  if (CRM_SEEKING.has(s)) return s;
+  if (s === 'man') return 'male';
+  if (s === 'woman') return 'female';
+  return null;
+};
+
+// @route   POST /api/admin/users/with-photo
+// @desc    CRM: create regular user + profile + main photo in one transaction, then send login email (no orphan users without photo).
+// @access  Superadmin or Viewer
+router.post(
+  '/users/with-photo',
+  protect,
+  admin,
+  profilePhotoUpload.single('photo'),
+  async (req, res) => {
+    try {
+      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+        return res.status(403).json({ message: 'You do not have permission to create users' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: 'Profile photo is required' });
+      }
+
+      const email = String(req.body.email || '').toLowerCase().trim();
+      const firstName = String(req.body.firstName || '').trim();
+      const lastName = String(req.body.lastName || '').trim();
+      const age = parseInt(req.body.age, 10);
+      const gender = normalizeCrmGender(req.body.gender);
+      const seeking = normalizeCrmSeeking(req.body.seeking) || 'both';
+      const hometown = req.body.hometown || '';
+      const bio = typeof req.body.bio === 'string' ? req.body.bio : '';
+      const idealPartner = typeof req.body.idealPartner === 'string' ? req.body.idealPartner : '';
+      const interests = parseCrmInterests(req.body.interests);
+
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ message: 'Valid email is required' });
+      }
+      if (!firstName) {
+        return res.status(400).json({ message: 'First name is required' });
+      }
+      if (!Number.isInteger(age) || age < 18) {
+        return res.status(400).json({ message: 'Age must be 18 or older' });
+      }
+      if (!gender) {
+        return res.status(400).json({ message: 'Valid gender is required' });
+      }
+
+      const passwordRaw = req.body.password;
+      const passwordToSet =
+        passwordRaw && typeof passwordRaw === 'string' && passwordRaw.trim().length >= 6
+          ? passwordRaw.trim()
+          : crypto.randomBytes(24).toString('hex');
+
+      const existingUser = await User.findOne({ where: { email } });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email address already registered' });
+      }
+
+      const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
+      const country = typeof hometown === 'string' ? (hometown.split(',')[1] || '').trim() : '';
+
+      let user;
+      let profile;
+      await sequelize.transaction(async (t) => {
+        user = await User.create(
+          {
+            email,
+            password: passwordToSet,
+            userType: 'regular',
+            isVerified: false,
+            isActive: true,
+            isAdminCreated: true,
+            registrationComplete: true,
+          },
+          { transaction: t }
+        );
+        profile = await Profile.create(
+          {
+            userId: user.id,
+            firstName,
+            lastName: lastName || '',
+            age,
+            gender,
+            bio,
+            interests,
+            location: { city, country },
+            preferences: {
+              lookingFor: seeking || 'both',
+              description: idealPartner,
+            },
+            photos: [],
+          },
+          { transaction: t }
+        );
+        const photoUrl = await uploadToSpaces(
+          req.file.buffer,
+          req.file.mimetype,
+          'profiles/photos',
+          req.file.originalname
+        );
+        const newPhoto = {
+          url: photoUrl,
+          isPublic: true,
+          uploadedAt: new Date().toISOString(),
+        };
+        await profile.update({ photos: [newPhoto] }, { transaction: t });
+      });
+
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+
+      res.status(201).json({
+        message: loginEmail.sent
+          ? 'User created successfully. Login email sent.'
+          : 'User created successfully, but login email could not be sent.',
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+        },
+        profile: {
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          age: profile.age,
+        },
+        loginEmailSent: loginEmail.sent,
+        loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
+      });
+    } catch (error) {
+      console.error('Error creating user with photo:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   POST /api/admin/streamers/with-photo
+// @desc    CRM: create streamer + profile + main photo in one transaction, then send login email.
+// @access  Superadmin or Viewer
+router.post(
+  '/streamers/with-photo',
+  protect,
+  admin,
+  profilePhotoUpload.single('photo'),
+  async (req, res) => {
+    try {
+      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+        return res.status(403).json({ message: 'You do not have permission to create streamers' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: 'Profile photo is required' });
+      }
+
+      const email = String(req.body.email || '').toLowerCase().trim();
+      const firstName = String(req.body.firstName || '').trim();
+      const lastName = String(req.body.lastName || '').trim();
+      const age = req.body.age != null && req.body.age !== '' ? parseInt(req.body.age, 10) : 18;
+      const gender = normalizeCrmGender(req.body.gender);
+      const seeking = normalizeCrmSeeking(req.body.seeking) || 'both';
+      const hometown = req.body.hometown || '';
+      const bio = typeof req.body.bio === 'string' ? req.body.bio : '';
+      const idealPartner = typeof req.body.idealPartner === 'string' ? req.body.idealPartner : '';
+      const interests = parseCrmInterests(req.body.interests);
+
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ message: 'Valid email is required' });
+      }
+      if (!firstName) {
+        return res.status(400).json({ message: 'First name is required' });
+      }
+      if (!Number.isInteger(age) || age < 18) {
+        return res.status(400).json({ message: 'Age must be 18 or older' });
+      }
+      if (!gender) {
+        return res.status(400).json({ message: 'Valid gender is required' });
+      }
+
+      const passwordRaw = req.body.password;
+      const passwordToSet =
+        passwordRaw && typeof passwordRaw === 'string' && passwordRaw.trim().length >= 6
+          ? passwordRaw.trim()
+          : crypto.randomBytes(24).toString('hex');
+
+      const existingUser = await User.findOne({ where: { email } });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email address already registered' });
+      }
+
+      const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
+      const country = typeof hometown === 'string' ? (hometown.split(',')[1] || '').trim() : '';
+
+      let user;
+      let profile;
+      await sequelize.transaction(async (t) => {
+        user = await User.create(
+          {
+            email,
+            password: passwordToSet,
+            userType: 'streamer',
+            isVerified: false,
+            isActive: true,
+            isAdminCreated: true,
+            registrationComplete: true,
+          },
+          { transaction: t }
+        );
+        profile = await Profile.create(
+          {
+            userId: user.id,
+            firstName,
+            lastName: lastName || '',
+            age,
+            gender,
+            bio,
+            interests,
+            location: { city, country },
+            preferences: {
+              lookingFor: seeking || 'both',
+              description: idealPartner,
+              videoChat: false,
+            },
+            photos: [],
+          },
+          { transaction: t }
+        );
+        const photoUrl = await uploadToSpaces(
+          req.file.buffer,
+          req.file.mimetype,
+          'profiles/photos',
+          req.file.originalname
+        );
+        const newPhoto = {
+          url: photoUrl,
+          isPublic: true,
+          uploadedAt: new Date().toISOString(),
+        };
+        await profile.update({ photos: [newPhoto] }, { transaction: t });
+      });
+
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+
+      res.status(201).json({
+        message: loginEmail.sent
+          ? 'Streamer created successfully. Login email sent.'
+          : 'Streamer created successfully, but login email could not be sent.',
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+        },
+        profile: {
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          age: profile.age,
+        },
+        loginEmailSent: loginEmail.sent,
+        loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
+      });
+    } catch (error) {
+      console.error('Error creating streamer with photo:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   POST /api/admin/users
 // @desc    Create a new regular user
 // @access  Superadmin or Viewer
@@ -434,8 +733,13 @@ router.post(
     body('password').optional().isLength({ min: 6 }),
     body('firstName').trim().notEmpty(),
     body('age').isInt({ min: 18 }),
-    body('gender').isIn(['male', 'female', 'other']),
-    body('seeking').optional().isIn(['male', 'female', 'both']),
+    body('gender')
+      .custom((v) => normalizeCrmGender(v) !== null)
+      .withMessage('Gender must be male, female, or other'),
+    body('seeking')
+      .optional({ checkFalsy: true })
+      .custom((v) => normalizeCrmSeeking(v) !== null)
+      .withMessage('Seeking must be male, female, or both'),
   ],
   async (req, res) => {
     try {
@@ -449,7 +753,9 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, password, firstName, lastName, age, gender, seeking, hometown, bio, interests, idealPartner } = req.body;
+      const { email, password, firstName, lastName, age, hometown, bio, interests, idealPartner } = req.body;
+      const gender = normalizeCrmGender(req.body.gender);
+      const seeking = normalizeCrmSeeking(req.body.seeking) || 'both';
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
@@ -491,7 +797,7 @@ router.post(
         interests: Array.isArray(interests) ? interests : [],
         location: { city, country },
         preferences: {
-          lookingFor: seeking || 'both',
+          lookingFor: seeking,
           description: typeof idealPartner === 'string' ? idealPartner : '',
         },
       });
@@ -535,8 +841,13 @@ router.post(
     body('password').optional().isLength({ min: 6 }),
     body('firstName').trim().notEmpty(),
     body('age').optional().isInt({ min: 18 }),
-    body('gender').optional().isIn(['male', 'female', 'other']),
-    body('seeking').optional().isIn(['male', 'female', 'both']),
+    body('gender')
+      .custom((v) => normalizeCrmGender(v) !== null)
+      .withMessage('Gender must be male, female, or other'),
+    body('seeking')
+      .optional({ checkFalsy: true })
+      .custom((v) => normalizeCrmSeeking(v) !== null)
+      .withMessage('Seeking must be male, female, or both'),
   ],
   async (req, res) => {
     try {
@@ -547,7 +858,9 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      const { email, password, firstName, lastName, age, gender, seeking, hometown, bio, interests, idealPartner } = req.body;
+      const { email, password, firstName, lastName, age, hometown, bio, interests, idealPartner } = req.body;
+      const gender = normalizeCrmGender(req.body.gender);
+      const seeking = normalizeCrmSeeking(req.body.seeking) || 'both';
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
@@ -576,12 +889,12 @@ router.post(
         firstName: firstName.trim(),
         lastName: (lastName && String(lastName).trim()) || '',
         age: age != null ? parseInt(age, 10) : 18,
-        gender: gender || 'other',
+        gender,
         bio: typeof bio === 'string' ? bio : '',
         interests: Array.isArray(interests) ? interests : [],
         location: { city, country },
         preferences: {
-          lookingFor: seeking || 'both',
+          lookingFor: seeking,
           description: typeof idealPartner === 'string' ? idealPartner : '',
           // Streamers are created with video chat off by default from CRM.
           videoChat: false,
