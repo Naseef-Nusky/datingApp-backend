@@ -10,6 +10,7 @@ import { sendProfileViewsBatchEmail } from '../utils/emailService.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
+import { isDummyUserEmail, excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
 
 const router = express.Router();
 
@@ -210,7 +211,7 @@ router.get('/', protect, async (req, res) => {
     // Join with User to control which account types are visible in browse.
     // - Regular users should NEVER see admin/superadmin/moderator/viewer accounts.
     // - Regular users can see real users + streamers.
-    // - Streamers/talent must only see real users (no other streamers/admins).
+    // - Streamers/talent must only see real members (no other streamers/admins, no dummy*@example.com seeds).
     // - Admin/CRM views should still respect registrationComplete so only fully registered users appear.
     const isStreamerOrTalent = req.user.userType === 'streamer' || req.user.userType === 'talent';
     const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
@@ -221,7 +222,13 @@ router.get('/', protect, async (req, res) => {
         as: 'user',
         attributes: [],
         where: isStreamerOrTalent
-          ? { userType: 'regular', registrationComplete: true }
+          ? {
+              [Op.and]: [
+                { userType: 'regular' },
+                { registrationComplete: true },
+                excludeDummyUsersEmailWhere(),
+              ],
+            }
           : {
               userType: { [Op.notIn]: adminRoles },
               registrationComplete: true,
@@ -456,10 +463,7 @@ router.get('/', protect, async (req, res) => {
           const user = await User.findByPk(profile.userId, {
             attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
           });
-          const isDummyProfile =
-            typeof user?.email === 'string' &&
-            user.email.startsWith('dummy') &&
-            user.email.endsWith('@example.com');
+          const isDummyProfile = isDummyUserEmail(user?.email);
           
           return {
             id: profile.id,
@@ -578,10 +582,14 @@ router.get('/:id', protect, async (req, res) => {
     const user = await User.findByPk(profile.userId, {
       attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
     });
-    const isDummyProfile =
-      typeof user?.email === 'string' &&
-      user.email.startsWith('dummy') &&
-      user.email.endsWith('@example.com');
+
+    const isStreamerOrTalent =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+    if (isStreamerOrTalent && user && isDummyUserEmail(user.email)) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    const isDummyProfile = isDummyUserEmail(user?.email);
     const profileOnlineState = getRotatingOnlineState(
       profile.userId,
       !!profile.isOnline,

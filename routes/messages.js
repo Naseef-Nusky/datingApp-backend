@@ -19,6 +19,7 @@ import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings } from '../utils/creditSettings.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
 import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
+import { isDummyUserEmail } from '../utils/dummyUser.js';
 
 const router = express.Router();
 
@@ -420,8 +421,14 @@ router.get('/', protect, async (req, res) => {
         const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
         if (isStreamer) {
           const otherUserId = chat.user1Id === req.user.id ? chat.user2Id : chat.user1Id;
-          const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'userType'] });
-          if (!otherUser || otherUser.userType !== 'regular') {
+          const otherUser = await User.findByPk(otherUserId, {
+            attributes: ['id', 'userType', 'email'],
+          });
+          if (
+            !otherUser ||
+            otherUser.userType !== 'regular' ||
+            isDummyUserEmail(otherUser.email)
+          ) {
             return res.status(403).json({ message: 'Not authorized to view this conversation' });
           }
         }
@@ -436,8 +443,12 @@ router.get('/', protect, async (req, res) => {
       // Streamers may only load messages with real users (not other streamers)
       const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
       if (isStreamer) {
-        const otherUser = await User.findByPk(userId, { attributes: ['id', 'userType'] });
-        if (!otherUser || otherUser.userType !== 'regular') {
+        const otherUser = await User.findByPk(userId, { attributes: ['id', 'userType', 'email'] });
+        if (
+          !otherUser ||
+          otherUser.userType !== 'regular' ||
+          isDummyUserEmail(otherUser.email)
+        ) {
           return res.status(403).json({ message: 'Not authorized to view this conversation' });
         }
       }
@@ -686,7 +697,10 @@ router.get('/chats', protect, async (req, res) => {
     const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
     if (isStreamer) {
       chatsWithDetails = chatsWithDetails.filter(
-        (c) => c.otherUser && c.otherUser.userType === 'regular'
+        (c) =>
+          c.otherUser &&
+          c.otherUser.userType === 'regular' &&
+          !isDummyUserEmail(c.otherUser.email)
       );
     }
 
@@ -780,7 +794,10 @@ router.get('/conversations', protect, async (req, res) => {
       // Streamers see ONLY conversations with real users (no other streamers)
       const isStreamer = req.user.userType === 'streamer' || req.user.userType === 'talent';
       if (isStreamer) {
-        conversations = conversations.filter((c) => c.otherUserRole === 'regular');
+        conversations = conversations.filter(
+          (c) =>
+            c.otherUserRole === 'regular' && !isDummyUserEmail(c.user?.email)
+        );
         conversations.forEach((c) => {
           delete c.otherUserRole;
         });
@@ -837,7 +854,7 @@ router.get('/conversations', protect, async (req, res) => {
         : message.senderData;
 
       if (isStreamer) {
-        if (otherUser.userType !== 'regular') continue;
+        if (otherUser.userType !== 'regular' || isDummyUserEmail(otherUser.email)) continue;
       }
 
       if (!conversationsMap.has(otherUserId)) {
@@ -991,6 +1008,21 @@ router.post('/chat-requests', protect, async (req, res) => {
       return res.status(403).json({ message: 'Cannot send chat request: User is blocked' });
     }
 
+    const receiverUser = await User.findByPk(receiverId, {
+      attributes: ['id', 'email', 'userType'],
+    });
+    if (!receiverUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const isStreamerSender =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+    if (
+      isStreamerSender &&
+      (receiverUser.userType !== 'regular' || isDummyUserEmail(receiverUser.email))
+    ) {
+      return res.status(403).json({ message: 'Streamers can only contact real members.' });
+    }
+
     const restriction = await checkFreeToFreeRestriction(req.user.id, receiverId);
     if (!restriction.allowed) {
       return res.status(403).json({ message: restriction.message });
@@ -1119,7 +1151,12 @@ router.get('/chat-requests', protect, async (req, res) => {
     });
 
     console.log('✅ [GET CHAT REQUESTS] Found', requests.length, 'requests');
-    res.json(requests);
+    const viewerIsStreamer =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+    const payload = viewerIsStreamer
+      ? requests.filter((r) => !isDummyUserEmail(r.senderData?.email))
+      : requests;
+    res.json(payload);
   } catch (error) {
     console.error('❌ [GET CHAT REQUESTS] Error:', error);
     console.error('❌ [GET CHAT REQUESTS] Error message:', error.message);
@@ -1159,6 +1196,12 @@ router.put('/chat-requests/:requestId/accept', protect, async (req, res) => {
 
     if (chatRequest.status !== 'pending') {
       return res.status(400).json({ message: `Chat request is already ${chatRequest.status}` });
+    }
+
+    const acceptorIsStreamer =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+    if (acceptorIsStreamer && isDummyUserEmail(chatRequest.senderData?.email)) {
+      return res.status(403).json({ message: 'Cannot accept requests from demo accounts.' });
     }
 
     // Check if chat already exists
@@ -1674,7 +1717,16 @@ router.get('/call-requests', protect, async (req, res) => {
     });
 
     console.log(`✅ [API] Found ${requests.length} call requests for user ${req.user.id}`);
-    res.json(requests);
+    const viewerIsStreamer =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+    const payload = viewerIsStreamer
+      ? requests.filter((r) => {
+          const other =
+            r.receiverId === req.user.id ? r.callerData : r.receiverData;
+          return other && !isDummyUserEmail(other.email);
+        })
+      : requests;
+    res.json(payload);
   } catch (error) {
     console.error('❌ [API] Get call requests error:', error);
     console.error('Error details:', error.message);

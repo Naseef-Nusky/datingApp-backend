@@ -811,7 +811,7 @@ router.post(
 
 // --- Google OAuth ---
 // In Google Cloud Console: "Authorized JavaScript origins" = base URL only, no path, no trailing slash (e.g. http://localhost:3000).
-// "Authorized redirect URIs" = full callback URL (e.g. http://localhost:5000/api/auth/google/callback).
+// "Authorized redirect URIs" = full callback URL (e.g. http://localhost:5000/api/auth/google/callback — same port as API).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const getBackendUrl = () => (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/$/, '');

@@ -3,17 +3,17 @@ import { Op } from 'sequelize';
 import Profile from '../models/Profile.js';
 import User from '../models/User.js';
 import { protect, streamer, admin } from '../middleware/auth.js';
+import { excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
 
 const router = express.Router();
 
-// Real-users-only filter: streamers see only real users (userType regular), never other streamers
+// Real users only: regular + active + not seeded dummy*@example.com (still userType regular)
 const realUsersWhere = {
-  userType: 'regular',
-  isActive: true,
+  [Op.and]: [{ userType: 'regular' }, { isActive: true }, excludeDummyUsersEmailWhere()],
 };
 
 // @route   GET /api/streamer/online-users
-// @desc    Streamers see ONLY real users who are online. No streamers, no admin-created profiles. Server-controlled.
+// @desc    Streamers see real members online only (excludes other streamers and dummy*@example.com seeds).
 // @access  Private (Streamer only)
 router.get('/online-users', protect, streamer, async (req, res) => {
   try {
@@ -43,7 +43,7 @@ router.get('/online-users', protect, streamer, async (req, res) => {
 });
 
 // @route   GET /api/streamer/users
-// @desc    Streamers see ALL real users (online + offline). Only real users, never other streamers. Includes isOnline/lastSeen so streamers can identify who is online.
+// @desc    Streamers see real members only (excludes other streamers and dummy*@example.com seeds).
 // @access  Private (Streamer only)
 router.get('/users', protect, streamer, async (req, res) => {
   try {

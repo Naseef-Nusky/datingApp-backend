@@ -100,7 +100,8 @@ const io = new SocketServer(httpServer, {
   upgradeTimeout: 10000, // Upgrade timeout
 });
 
-const PORT = process.env.PORT || 5001;
+// Default must match frontend/admin/landing Vite proxy (see */vite.config.* → localhost:5000) and backend/.env.example
+const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 const __filename = fileURLToPath(import.meta.url);
