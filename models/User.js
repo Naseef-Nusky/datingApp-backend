@@ -80,6 +80,13 @@ const User = sequelize.define(
       allowNull: true,
       field: 'login_link_expires',
     },
+    /** Stable Apple user identifier from Sign in with Apple (sub claim). */
+    appleSub: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true,
+      field: 'apple_sub',
+    },
     registrationComplete: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,

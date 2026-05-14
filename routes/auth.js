@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import { ensureVerificationStateForUser } from '../utils/userCompliance.js';
+import * as jose from 'jose';
 
 const router = express.Router();
 
@@ -804,6 +805,153 @@ router.post(
       });
     } catch (error) {
       console.error('Verify login link error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// --- Sign in with Apple (native identity token) ---
+// Apple: enable "Sign In with Apple" for App ID; Xcode capability; verify aud = bundle id (and optional Services ID).
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const appleJwks = jose.createRemoteJWKSet(new URL(`${APPLE_ISSUER}/auth/keys`));
+
+async function verifyAppleIdentityToken(identityToken) {
+  const bundleId = (process.env.APPLE_BUNDLE_ID || 'com.vantagedating.app').trim();
+  const servicesId = (process.env.APPLE_SERVICES_ID || '').trim();
+  const audiences = [bundleId, servicesId].filter(Boolean);
+  const { payload } = await jose.jwtVerify(identityToken, appleJwks, {
+    issuer: APPLE_ISSUER,
+    audience: audiences.length ? audiences : [bundleId],
+  });
+  return payload;
+}
+
+// @route   POST /api/auth/apple
+// @desc    Sign in / register with Apple identityToken (iOS Capacitor). Guideline 4.8 companion to Google.
+// @access  Public
+router.post(
+  '/apple',
+  [body('identityToken').trim().notEmpty()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ message: 'Missing identity token' });
+      }
+
+      const identityToken = req.body.identityToken.trim();
+      let payload;
+      try {
+        payload = await verifyAppleIdentityToken(identityToken);
+      } catch (e) {
+        console.error('Apple token verify failed:', e.message || e);
+        return res.status(401).json({ message: 'Invalid Apple sign-in' });
+      }
+
+      const sub = String(payload.sub || '').trim();
+      if (!sub) {
+        return res.status(401).json({ message: 'Invalid Apple token' });
+      }
+
+      const emailFromToken = (payload.email || '').toLowerCase().trim();
+      const given = (req.body.givenName || '').trim();
+      const family = (req.body.familyName || '').trim();
+      const displayFirst =
+        given ||
+        (emailFromToken ? emailFromToken.split('@')[0] : '') ||
+        'Member';
+
+      let user = await User.findOne({ where: { appleSub: sub } });
+      if (!user && emailFromToken) {
+        user = await User.findOne({
+          where: { email: { [Op.iLike]: emailFromToken } },
+        });
+      }
+
+      if (!user) {
+        if (!emailFromToken) {
+          return res.status(400).json({
+            message:
+              'Apple did not return an email for this sign-in. Use “Share My Email” once, or sign in with email/password.',
+          });
+        }
+        const randomPassword = crypto.randomBytes(16).toString('hex');
+        const hashed = await bcrypt.hash(randomPassword, 10);
+        user = await User.create({
+          email: emailFromToken,
+          password: hashed,
+          appleSub: sub,
+          userType: 'regular',
+          registrationComplete: false,
+        });
+        await Profile.create({
+          userId: user.id,
+          firstName: displayFirst.charAt(0).toUpperCase() + displayFirst.slice(1).toLowerCase(),
+          lastName: family || '',
+          age: 18,
+          gender: 'other',
+        });
+        user.profile = { firstName: displayFirst };
+      } else {
+        if (!user.appleSub) {
+          user.appleSub = sub;
+          await user.save();
+        }
+      }
+
+      await ensureVerificationStateForUser(user);
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      const profile = await Profile.findOne({ where: { userId: user.id } });
+      if (profile) {
+        const wasOnline = !!profile.isOnline;
+        profile.isOnline = true;
+        profile.lastSeen = new Date();
+        if (given && !profile.firstName) profile.firstName = given;
+        if (family && !profile.lastName) profile.lastName = family;
+        await profile.save();
+        if (!wasOnline) {
+          notifyContactsWhenUserComesOnline(user, profile);
+        }
+      }
+
+      const token = generateToken(user.id, user.userType);
+
+      const hasPhoto = Array.isArray(profile?.photos) && profile.photos.length > 0;
+      const hasLookingFor = Boolean(profile?.preferences?.lookingFor);
+      const hasBasicProfile =
+        Boolean(profile?.firstName) &&
+        Boolean(profile?.gender) &&
+        Number(profile?.age || 0) >= 18;
+      const profileLooksIncomplete = !profile || !hasBasicProfile || !hasLookingFor || !hasPhoto;
+      const needsProfileCompletion = user.registrationComplete === false || profileLooksIncomplete;
+
+      res.json({
+        token,
+        registrationComplete: !needsProfileCompletion,
+        needsProfileCompletion,
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+          credits: user.credits,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+          verificationExpiresAt: user.verificationExpiresAt,
+        },
+        profile: profile
+          ? {
+              firstName: profile.firstName,
+              lastName: profile.lastName,
+              age: profile.age,
+              gender: profile.gender,
+            }
+          : null,
+      });
+    } catch (error) {
+      console.error('Apple sign-in error:', error);
       res.status(500).json({ message: 'Server error' });
     }
   }
