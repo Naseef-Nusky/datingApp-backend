@@ -1,4 +1,6 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
+import https from 'node:https';
 import { v4 as uuidv4 } from 'uuid';
 
 // DigitalOcean Spaces configuration
@@ -8,8 +10,20 @@ const spacesSecret = process.env.DO_SPACES_SECRET; // Secret Access Key
 const spacesName = process.env.DO_SPACES_NAME; // Space name
 const spacesRegion = process.env.DO_SPACES_REGION || 'nyc3'; // Region
 
+/** Corporate proxy / HTTPS inspection breaks the chain to *.digitaloceanspaces.com. Prefer NODE_EXTRA_CA_CERTS. */
+const spacesTlsInsecure =
+  process.env.DO_SPACES_TLS_REJECT_UNAUTHORIZED === '0' ||
+  process.env.DO_SPACES_TLS_REJECT_UNAUTHORIZED === 'false';
+
+if (spacesTlsInsecure) {
+  console.warn(
+    '[Spaces] DO_SPACES_TLS_REJECT_UNAUTHORIZED=false: TLS verification disabled for Spaces (S3) requests only. ' +
+      'Add your proxy CA via NODE_EXTRA_CA_CERTS when possible.'
+  );
+}
+
 // Create S3 client (DigitalOcean Spaces is S3-compatible)
-const s3Client = new S3Client({
+const s3ClientConfig = {
   endpoint: `https://${spacesEndpoint}`,
   region: spacesRegion,
   credentials: {
@@ -17,7 +31,15 @@ const s3Client = new S3Client({
     secretAccessKey: spacesSecret,
   },
   forcePathStyle: false, // DigitalOcean Spaces uses virtual-hosted-style
-});
+};
+
+if (spacesTlsInsecure) {
+  s3ClientConfig.requestHandler = new NodeHttpHandler({
+    httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+  });
+}
+
+const s3Client = new S3Client(s3ClientConfig);
 
 /**
  * Upload a file to DigitalOcean Spaces
