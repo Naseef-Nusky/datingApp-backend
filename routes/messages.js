@@ -20,6 +20,7 @@ import { getCreditSettings } from '../utils/creditSettings.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
 import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 import { isDummyUserEmail } from '../utils/dummyUser.js';
+import { recordChatEngagement } from '../utils/engagementTracking.js';
 
 const router = express.Router();
 
@@ -249,6 +250,16 @@ router.post('/', protect, async (req, res) => {
 
     const message = await Message.create(messageData);
     console.log(`✅ Message created with ID: ${message.id}, sender: ${message.sender}, receiver: ${message.receiver}`);
+
+    try {
+      await recordChatEngagement({
+        senderId: req.user.id,
+        receiverId,
+        chatId: chat?.id || null,
+      });
+    } catch (engErr) {
+      console.error('recordChatEngagement error:', engErr.message);
+    }
 
     // When user "adds to contact" (star on profile), send "X has added you to favorites" email to the receiver
     if (isAddToContactMessage) {

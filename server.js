@@ -19,6 +19,12 @@ import { Op } from 'sequelize';
 import { getCreditSettings } from './utils/creditSettings.js';
 import { sendOnlineNotification } from './utils/sendgridService.js';
 import { updateUserSpendAndVip } from './utils/vip.js';
+import {
+  startCallEngagement,
+  endCallEngagement,
+  closeActiveSessionsForStreamer,
+  closeStaleChatSessions,
+} from './utils/engagementTracking.js';
 import { checkFreeToFreeRestriction, expireVerificationSweep, enforceFreeUserEligibilitySweep } from './utils/userCompliance.js';
 
 // Import routes
@@ -501,6 +507,17 @@ io.on('connection', (socket) => {
           answeredAt: new Date(),
         });
         console.log(`✅ [SERVER] Call request ${callRequest.id} marked as accepted`);
+
+        try {
+          await startCallEngagement({
+            callerId,
+            receiverId,
+            callType: callRequest.callType,
+            callRequestId: callRequest.id,
+          });
+        } catch (engErr) {
+          console.error('[SERVER] startCallEngagement error:', engErr.message);
+        }
         
         // Clear missed call timeout if it exists
         const callerSocket = Array.from(io.sockets.sockets.values()).find(
@@ -719,6 +736,17 @@ io.on('connection', (socket) => {
         });
         console.log(`✅ [SERVER] Call request ${callRequest.id} marked as completed (duration: ${duration}s)`);
 
+        try {
+          await endCallEngagement({
+            userId,
+            otherUserId,
+            durationSeconds: duration,
+            callRequestId: callRequest.id,
+          });
+        } catch (engErr) {
+          console.error('[SERVER] endCallEngagement error:', engErr.message);
+        }
+
         // Apply credit charge for completed call (configured via CRM)
         try {
           const settings = await getCreditSettings();
@@ -811,11 +839,19 @@ io.on('connection', (socket) => {
     console.log(`✅ Contact-update and call-request-update events emitted for call ended`);
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     const userId = socketUserMap.get(socket.id);
     if (userId) {
       console.log(`👋 User ${userId} disconnected (socket: ${socket.id})`);
       socketUserMap.delete(socket.id);
+      try {
+        const u = await User.findByPk(userId, { attributes: ['userType'] });
+        if (u && (u.userType === 'streamer' || u.userType === 'talent')) {
+          await closeActiveSessionsForStreamer(userId);
+        }
+      } catch (engErr) {
+        console.error('Disconnect: close engagement sessions error', engErr.message);
+      }
       // Set offline + last_seen (role-based: backend controls online status)
       Profile.update(
         { isOnline: false, lastSeen: new Date() },
@@ -840,6 +876,13 @@ const startServer = async () => {
     } catch (error) {
       console.warn('⚠️ Could not start daily digest scheduler:', error.message);
     }
+
+    // Close idle chat engagement sessions every 2 minutes
+    setInterval(() => {
+      closeStaleChatSessions().catch((err) =>
+        console.error('closeStaleChatSessions error:', err.message)
+      );
+    }, 2 * 60 * 1000);
 
     // Compliance scheduler: verification expiry + free user eligibility checks
     const runComplianceSweep = async () => {

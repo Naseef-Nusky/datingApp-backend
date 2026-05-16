@@ -22,6 +22,7 @@ import {
   Match,
   ChatRequest,
   CallRequest,
+  EngagementSession,
   Story,
   CreditTransaction,
   Block,
@@ -33,6 +34,10 @@ import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
+import {
+  formatDuration,
+  secondsToHours,
+} from '../utils/engagementTracking.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2489,5 +2494,244 @@ router.put(
     }
   }
 );
+
+// @route   GET /api/admin/streamer-engagement/summary
+// @desc    Payroll summary: hours per streamer (chat, video, voice)
+// @access  Admin
+router.get('/streamer-engagement/summary', protect, admin, async (req, res) => {
+  try {
+    const { from, to, streamerId } = req.query;
+    const where = { status: 'completed' };
+
+    if (streamerId) {
+      where.streamerId = streamerId;
+    }
+
+    if (from || to) {
+      where.startedAt = {};
+      if (from) where.startedAt[Op.gte] = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        where.startedAt[Op.lte] = end;
+      }
+    }
+
+    const sessions = await EngagementSession.findAll({
+      where,
+      attributes: [
+        'streamerId',
+        'sessionType',
+        'durationSeconds',
+      ],
+    });
+
+    const byStreamer = new Map();
+
+    for (const s of sessions) {
+      const id = s.streamerId;
+      if (!byStreamer.has(id)) {
+        byStreamer.set(id, {
+          streamerId: id,
+          chatSeconds: 0,
+          videoSeconds: 0,
+          voiceSeconds: 0,
+          chatSessionCount: 0,
+          videoSessionCount: 0,
+          voiceSessionCount: 0,
+          sessionCount: 0,
+        });
+      }
+      const row = byStreamer.get(id);
+      const dur = s.durationSeconds || 0;
+      row.sessionCount += 1;
+      if (s.sessionType === 'chat') {
+        row.chatSeconds += dur;
+        row.chatSessionCount += 1;
+      } else if (s.sessionType === 'video') {
+        row.videoSeconds += dur;
+        row.videoSessionCount += 1;
+      } else if (s.sessionType === 'voice') {
+        row.voiceSeconds += dur;
+        row.voiceSessionCount += 1;
+      }
+    }
+
+    const streamerIds = [...byStreamer.keys()];
+    const streamers =
+      streamerIds.length > 0
+        ? await User.findAll({
+            where: { id: streamerIds },
+            attributes: ['id', 'email', 'userType'],
+            include: [
+              {
+                model: Profile,
+                as: 'profile',
+                attributes: ['firstName', 'lastName'],
+                required: false,
+              },
+            ],
+          })
+        : [];
+
+    const streamerMap = Object.fromEntries(streamers.map((u) => [u.id, u]));
+
+    const summary = [...byStreamer.values()]
+      .map((row) => {
+        const u = streamerMap[row.streamerId];
+        const totalSeconds =
+          row.chatSeconds + row.videoSeconds + row.voiceSeconds;
+        return {
+          ...row,
+          email: u?.email || null,
+          firstName: u?.profile?.firstName || null,
+          lastName: u?.profile?.lastName || null,
+          userType: u?.userType || null,
+          totalSeconds,
+          totalHours: secondsToHours(totalSeconds),
+          chatHours: secondsToHours(row.chatSeconds),
+          videoHours: secondsToHours(row.videoSeconds),
+          voiceHours: secondsToHours(row.voiceSeconds),
+          chatFormatted: formatDuration(row.chatSeconds),
+          videoFormatted: formatDuration(row.videoSeconds),
+          voiceFormatted: formatDuration(row.voiceSeconds),
+          totalFormatted: formatDuration(totalSeconds),
+        };
+      })
+      .sort((a, b) => b.totalSeconds - a.totalSeconds);
+
+    res.json({ summary, from: from || null, to: to || null });
+  } catch (error) {
+    console.error('streamer-engagement summary error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/streamer-engagement/sessions
+// @desc    Session log for one streamer (payroll detail)
+// @access  Admin
+router.get('/streamer-engagement/sessions', protect, admin, async (req, res) => {
+  try {
+    const {
+      streamerId,
+      from,
+      to,
+      type,
+      page = 1,
+      limit = 50,
+    } = req.query;
+
+    if (!streamerId) {
+      return res.status(400).json({ message: 'streamerId is required' });
+    }
+
+    const where = { streamerId, status: 'completed' };
+
+    if (type && ['chat', 'video', 'voice'].includes(type)) {
+      where.sessionType = type;
+    }
+
+    if (from || to) {
+      where.startedAt = {};
+      if (from) where.startedAt[Op.gte] = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        where.startedAt[Op.lte] = end;
+      }
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+    const offset = (pageNum - 1) * limitNum;
+
+    const { count, rows } = await EngagementSession.findAndCountAll({
+      where,
+      order: [['started_at', 'DESC']],
+      limit: limitNum,
+      offset,
+      include: [
+        {
+          model: User,
+          as: 'member',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: Profile,
+              as: 'profile',
+              attributes: ['firstName', 'lastName', 'age'],
+              required: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const sessions = rows.map((s) => ({
+      id: s.id,
+      sessionType: s.sessionType,
+      startedAt: s.startedAt,
+      endedAt: s.endedAt,
+      durationSeconds: s.durationSeconds,
+      durationFormatted: formatDuration(s.durationSeconds),
+      member: {
+        id: s.member?.id,
+        email: s.member?.email,
+        firstName: s.member?.profile?.firstName,
+        lastName: s.member?.profile?.lastName,
+        age: s.member?.profile?.age,
+      },
+      chatId: s.chatId,
+      callRequestId: s.callRequestId,
+    }));
+
+    res.json({
+      sessions,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: count,
+        pages: Math.ceil(count / limitNum),
+      },
+    });
+  } catch (error) {
+    console.error('streamer-engagement sessions error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/streamer-engagement/streamers
+// @desc    List streamers for filter dropdown
+// @access  Admin
+router.get('/streamer-engagement/streamers', protect, admin, async (req, res) => {
+  try {
+    const streamers = await User.findAll({
+      where: { userType: { [Op.in]: ['streamer', 'talent'] }, isActive: true },
+      attributes: ['id', 'email', 'userType'],
+      include: [
+        {
+          model: Profile,
+          as: 'profile',
+          attributes: ['firstName', 'lastName'],
+          required: false,
+        },
+      ],
+      order: [[{ model: Profile, as: 'profile' }, 'firstName', 'ASC']],
+    });
+
+    res.json({
+      streamers: streamers.map((u) => ({
+        id: u.id,
+        email: u.email,
+        userType: u.userType,
+        firstName: u.profile?.firstName,
+        lastName: u.profile?.lastName,
+      })),
+    });
+  } catch (error) {
+    console.error('streamer-engagement streamers error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 
 export default router;
