@@ -12,8 +12,78 @@ import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import { ensureVerificationStateForUser } from '../utils/userCompliance.js';
 import * as jose from 'jose';
+import jwt from 'jsonwebtoken';
+import { getSiteSettings } from '../utils/siteSettings.js';
 
 const router = express.Router();
+
+const STAFF_USER_TYPES = ['admin', 'superadmin', 'moderator', 'viewer'];
+
+async function assertAllowRegistrations(res) {
+  const site = await getSiteSettings();
+  if (site.allowRegistrations !== false) return true;
+  res.status(403).json({
+    message: 'New registrations are temporarily disabled.',
+    code: 'REGISTRATION_CLOSED',
+  });
+  return false;
+}
+
+async function assertVerifiedIfRequired(user, res) {
+  const site = await getSiteSettings();
+  if (site.requireEmailVerification === false) return true;
+  if (STAFF_USER_TYPES.includes(user.userType)) return true;
+  if (user.isVerified) return true;
+  res.status(403).json({
+    message:
+      'Please verify your email before signing in. Check your inbox or use resend verification.',
+    code: 'EMAIL_NOT_VERIFIED',
+  });
+  return false;
+}
+
+// @route   GET /api/auth/site-status
+// @desc    Public status for maintenance screen (staff JWT bypasses appInMaintenance)
+// @access  Public
+router.get('/site-status', async (req, res) => {
+  try {
+    const site = await getSiteSettings();
+    const maintenance = site.maintenanceMode === true;
+    let appInMaintenance = maintenance;
+
+    if (maintenance) {
+      const auth = req.headers.authorization;
+      if (auth && auth.startsWith('Bearer ')) {
+        try {
+          const token = auth.split(' ')[1];
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+          const staffUser = await User.findByPk(decoded.id, {
+            attributes: ['userType', 'isActive'],
+          });
+          if (
+            staffUser?.isActive &&
+            STAFF_USER_TYPES.includes(staffUser.userType)
+          ) {
+            appInMaintenance = false;
+          }
+        } catch {
+          /* invalid or expired token */
+        }
+      }
+    }
+
+    res.json({
+      maintenanceMode: maintenance,
+      appInMaintenance,
+      siteName: site.siteName || 'Vantage Dating',
+      maintenanceMessage: site.maintenanceMessage || '',
+      allowRegistrations: site.allowRegistrations !== false,
+    });
+  } catch (error) {
+    console.error('site-status error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 const getPrimaryPhotoUrl = (profile) => {
   const first = Array.isArray(profile?.photos) ? profile.photos[0] : null;
@@ -131,6 +201,8 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
+
+      if (!(await assertAllowRegistrations(res))) return;
 
       const { email, password, firstName, lastName, age, gender, lifestyle } = req.body;
 
@@ -345,6 +417,7 @@ router.post(
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
+      if (!(await assertVerifiedIfRequired(user, res))) return;
       if (user.userType !== 'regular') {
         return res.status(403).json({
           message: 'Use the correct login: streamers use /api/auth/streamer-login, admins use /api/auth/admin-login',
@@ -418,6 +491,8 @@ router.post(
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
+
+      if (!(await assertVerifiedIfRequired(user, res))) return;
 
       // Update last login
       user.lastLogin = new Date();
@@ -657,6 +732,8 @@ router.post(
       });
 
       if (!user) {
+        if (!(await assertAllowRegistrations(res))) return;
+
         const randomPassword = crypto.randomBytes(12).toString('hex');
         const hashed = await bcrypt.hash(randomPassword, 10);
         user = await User.create({
@@ -900,6 +977,8 @@ router.post(
       }
 
       await ensureVerificationStateForUser(user);
+
+      if (!(await assertVerifiedIfRequired(user, res))) return;
 
       user.lastLogin = new Date();
       await user.save();

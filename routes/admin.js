@@ -32,6 +32,11 @@ import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
+import {
+  getSiteSettings,
+  updateSiteSettings,
+  DEFAULT_SITE_SETTINGS,
+} from '../utils/siteSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
@@ -2416,6 +2421,67 @@ router.get('/payments', protect, admin, async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
+
+// @route   GET /api/admin/site-settings
+// @desc    Site-wide flags (maintenance, registrations, etc.)
+// @access  Admin
+router.get('/site-settings', protect, admin, async (req, res) => {
+  try {
+    const settings = await getSiteSettings();
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error fetching site settings:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/site-settings
+// @access  Admin
+router.put(
+  '/site-settings',
+  protect,
+  admin,
+  [
+    body('siteName').optional().isString().trim().isLength({ max: 200 }),
+    body('maintenanceMode').optional().isBoolean(),
+    body('allowRegistrations').optional().isBoolean(),
+    body('requireEmailVerification').optional().isBoolean(),
+    body('maxUploadSize').optional().isInt({ min: 1, max: 500 }),
+    body('enableNotifications').optional().isBoolean(),
+    body('maintenanceMessage').optional().isString().trim().isLength({ max: 2000 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const partial = {};
+      if (req.body.siteName != null) partial.siteName = String(req.body.siteName).trim();
+      if (req.body.maintenanceMode != null) partial.maintenanceMode = Boolean(req.body.maintenanceMode);
+      if (req.body.allowRegistrations != null) {
+        partial.allowRegistrations = Boolean(req.body.allowRegistrations);
+      }
+      if (req.body.requireEmailVerification != null) {
+        partial.requireEmailVerification = Boolean(req.body.requireEmailVerification);
+      }
+      if (req.body.maxUploadSize != null) {
+        partial.maxUploadSize = parseInt(req.body.maxUploadSize, 10) || DEFAULT_SITE_SETTINGS.maxUploadSize;
+      }
+      if (req.body.enableNotifications != null) {
+        partial.enableNotifications = Boolean(req.body.enableNotifications);
+      }
+      if (req.body.maintenanceMessage != null) {
+        partial.maintenanceMessage = String(req.body.maintenanceMessage).trim().slice(0, 2000);
+      }
+      const settings = await updateSiteSettings(partial);
+      res.json({ settings });
+    } catch (error) {
+      console.error('Error updating site settings:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
 
 // @route   GET /api/admin/credit-settings
 // @desc    Get current credit costs for chat messages and calls

@@ -25,7 +25,7 @@ import {
   closeActiveSessionsForStreamer,
   closeStaleChatSessions,
 } from './utils/engagementTracking.js';
-import { checkFreeToFreeRestriction, expireVerificationSweep, enforceFreeUserEligibilitySweep } from './utils/userCompliance.js';
+import { enforceApiMaintenanceMode } from './middleware/maintenanceMode.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -215,6 +215,8 @@ app.get('/', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+app.use(enforceApiMaintenanceMode);
 
 // API Routes
 app.use('/api/auth', authRoutes);
