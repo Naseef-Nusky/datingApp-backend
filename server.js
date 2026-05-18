@@ -26,6 +26,7 @@ import {
   closeStaleChatSessions,
 } from './utils/engagementTracking.js';
 import { enforceApiMaintenanceMode } from './middleware/maintenanceMode.js';
+import { checkFreeToFreeRestriction } from './utils/userCompliance.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
