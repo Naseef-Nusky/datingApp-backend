@@ -29,19 +29,6 @@ async function assertAllowRegistrations(res) {
   return false;
 }
 
-async function assertVerifiedIfRequired(user, res) {
-  const site = await getSiteSettings();
-  if (site.requireEmailVerification === false) return true;
-  if (STAFF_USER_TYPES.includes(user.userType)) return true;
-  if (user.isVerified) return true;
-  res.status(403).json({
-    message:
-      'Please verify your email before signing in. Check your inbox or use resend verification.',
-    code: 'EMAIL_NOT_VERIFIED',
-  });
-  return false;
-}
-
 // @route   GET /api/auth/site-status
 // @desc    Public status for maintenance screen (staff JWT bypasses appInMaintenance)
 // @access  Public
@@ -417,7 +404,6 @@ router.post(
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
-      if (!(await assertVerifiedIfRequired(user, res))) return;
       if (user.userType !== 'regular') {
         return res.status(403).json({
           message: 'Use the correct login: streamers use /api/auth/streamer-login, admins use /api/auth/admin-login',
@@ -491,8 +477,6 @@ router.post(
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
-
-      if (!(await assertVerifiedIfRequired(user, res))) return;
 
       // Update last login
       user.lastLogin = new Date();
@@ -977,8 +961,6 @@ router.post(
       }
 
       await ensureVerificationStateForUser(user);
-
-      if (!(await assertVerifiedIfRequired(user, res))) return;
 
       user.lastLogin = new Date();
       await user.save();

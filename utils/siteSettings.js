@@ -6,7 +6,6 @@ export const DEFAULT_SITE_SETTINGS = {
   siteName: 'Vantage Dating',
   maintenanceMode: false,
   allowRegistrations: true,
-  requireEmailVerification: true,
   maxUploadSize: 10,
   enableNotifications: true,
   maintenanceMessage: '',
@@ -33,6 +32,7 @@ export const getSiteSettings = async () => {
       ...DEFAULT_SITE_SETTINGS,
       ...(row?.value && typeof row.value === 'object' ? row.value : {}),
     };
+    delete merged.requireEmailVerification;
     cache = { value: merged, at: now };
     return merged;
   } catch (e) {
@@ -47,6 +47,7 @@ export const updateSiteSettings = async (partial) => {
     ...current,
     ...partial,
   };
+  delete merged.requireEmailVerification;
   await SystemSetting.upsert({
     key: SETTINGS_KEY,
     value: merged,

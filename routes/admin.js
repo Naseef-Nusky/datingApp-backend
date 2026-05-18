@@ -2445,7 +2445,6 @@ router.put(
     body('siteName').optional().isString().trim().isLength({ max: 200 }),
     body('maintenanceMode').optional().isBoolean(),
     body('allowRegistrations').optional().isBoolean(),
-    body('requireEmailVerification').optional().isBoolean(),
     body('maxUploadSize').optional().isInt({ min: 1, max: 500 }),
     body('enableNotifications').optional().isBoolean(),
     body('maintenanceMessage').optional().isString().trim().isLength({ max: 2000 }),
@@ -2461,9 +2460,6 @@ router.put(
       if (req.body.maintenanceMode != null) partial.maintenanceMode = Boolean(req.body.maintenanceMode);
       if (req.body.allowRegistrations != null) {
         partial.allowRegistrations = Boolean(req.body.allowRegistrations);
-      }
-      if (req.body.requireEmailVerification != null) {
-        partial.requireEmailVerification = Boolean(req.body.requireEmailVerification);
       }
       if (req.body.maxUploadSize != null) {
         partial.maxUploadSize = parseInt(req.body.maxUploadSize, 10) || DEFAULT_SITE_SETTINGS.maxUploadSize;
