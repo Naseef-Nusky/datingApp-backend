@@ -27,7 +27,11 @@ import {
   CreditTransaction,
   Block,
 } from '../models/index.js';
-import { protect, admin, superadmin } from '../middleware/auth.js';
+import { protect, admin, superadmin, notCrmStreamerStaff } from '../middleware/auth.js';
+import { excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
+import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
+import { parseLocalDateQuery } from '../utils/dateQuery.js';
+import CrmEvent from '../models/CrmEvent.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
@@ -112,16 +116,17 @@ const profilePhotoUpload = multer({
 // Admin Users Routes (for managing admin accounts)
 // ============================================
 
+const CRM_SYSTEM_USER_TYPES = ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'];
+
 // @route   GET /api/admin/admins
 // @desc    Get all admin users (superadmin, admin, moderator, viewer)
 // @access  Admin only
-router.get('/admins', protect, admin, async (req, res) => {
+router.get('/admins', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
-    const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
     const admins = await User.findAll({
       where: {
         userType: {
-          [Op.in]: adminRoles,
+          [Op.in]: CRM_SYSTEM_USER_TYPES,
         },
       },
       include: [
@@ -167,11 +172,12 @@ router.post(
   '/admins',
   protect,
   superadmin,
+  notCrmStreamerStaff,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').optional().isLength({ min: 6 }),
     body('firstName').trim().notEmpty(),
-    body('role').isIn(['superadmin', 'admin', 'moderator', 'viewer']),
+    body('role').isIn(['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer']),
   ],
   async (req, res) => {
     try {
@@ -241,7 +247,7 @@ router.put(
     body('email').optional().isEmail().normalizeEmail(),
     body('password').optional().isLength({ min: 6 }),
     body('firstName').optional().trim().notEmpty(),
-    body('role').optional().isIn(['superadmin', 'admin', 'moderator', 'viewer']),
+    body('role').optional().isIn(['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer']),
   ],
   async (req, res) => {
     try {
@@ -261,10 +267,8 @@ router.put(
         return res.status(404).json({ message: 'Admin user not found' });
       }
 
-      // Check if user is an admin type
-      const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
-      if (!adminRoles.includes(adminUser.userType)) {
-        return res.status(400).json({ message: 'User is not an admin' });
+      if (!CRM_SYSTEM_USER_TYPES.includes(adminUser.userType)) {
+        return res.status(400).json({ message: 'User is not a system user' });
       }
 
       // Update user fields
@@ -324,10 +328,8 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
       return res.status(404).json({ message: 'Admin user not found' });
     }
 
-    // Check if user is an admin type
-    const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
-    if (!adminRoles.includes(adminUser.userType)) {
-      return res.status(400).json({ message: 'User is not an admin' });
+    if (!CRM_SYSTEM_USER_TYPES.includes(adminUser.userType)) {
+      return res.status(400).json({ message: 'User is not a system user' });
     }
 
     // Delete profile first (if exists)
@@ -347,12 +349,58 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
 // Regular Users Routes (for managing regular users)
 // ============================================
 
+// @route   GET /api/admin/crm-events
+router.get('/crm-events', protect, admin, async (req, res) => {
+  try {
+    const unreadOnly = req.query.unreadOnly === '1' || req.query.unreadOnly === 'true';
+    const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+    const where = unreadOnly ? { readAt: null } : {};
+    const events = await CrmEvent.findAll({
+      where,
+      order: [['created_at', 'DESC']],
+      limit,
+    });
+    const unreadCount = await CrmEvent.count({ where: { readAt: null } });
+    res.json({ events, unreadCount });
+  } catch (error) {
+    console.error('Error fetching CRM events:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.patch('/crm-events/:id/read', protect, admin, async (req, res) => {
+  try {
+    const event = await CrmEvent.findByPk(req.params.id);
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+    event.readAt = new Date();
+    await event.save();
+    res.json({ event });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/crm-events/read-all', protect, admin, async (req, res) => {
+  try {
+    await CrmEvent.update({ readAt: new Date() }, { where: { readAt: null } });
+    res.json({ message: 'All marked as read' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   GET /api/admin/users
 // @desc    Get users. type: all|real|streamers. filter: all|active|inactive|verified|unverified|neverSpent|noSpend7d|noSpend30d
 // @access  Superadmin or Viewer
 router.get('/users', protect, admin, async (req, res) => {
   try {
-    const { filter, type, gender } = req.query;
+    if (req.user.userType === 'crm_streamer') {
+      req.query.type = 'real';
+      req.query.excludeDummy = '1';
+    }
+
+    const { filter, type, gender, createdFrom, createdTo, newUsers, excludeDummy, organicOnly } =
+      req.query;
 
     const andParts = [];
     andParts.push({
@@ -360,8 +408,42 @@ router.get('/users', protect, admin, async (req, res) => {
         ? { [Op.in]: ['streamer', 'talent'] }
         : type === 'real'
           ? 'regular'
-          : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'] },
+          : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'] },
     });
+
+    const skipDummy =
+      excludeDummy !== '0' && excludeDummy !== 'false' && (type === 'real' || type === 'all' || !type);
+    if (skipDummy) {
+      andParts.push(excludeDummyUsersEmailWhere());
+    }
+
+    if (organicOnly === '1' || organicOnly === 'true') {
+      andParts.push({ isAdminCreated: false });
+    }
+
+    const createdAtFilter = {};
+    if (newUsers === '1' || newUsers === 'true') {
+      const since = new Date();
+      since.setDate(since.getDate() - 7);
+      createdAtFilter[Op.gte] = since;
+    }
+    if (createdFrom) {
+      const from = parseLocalDateQuery(createdFrom, false);
+      if (from) {
+        createdAtFilter[Op.gte] = createdAtFilter[Op.gte]
+          ? new Date(Math.max(createdAtFilter[Op.gte].getTime(), from.getTime()))
+          : from;
+      }
+    }
+    if (createdTo) {
+      const to = parseLocalDateQuery(createdTo, true);
+      if (to) {
+        createdAtFilter[Op.lte] = to;
+      }
+    }
+    if (createdAtFilter[Op.gte] != null || createdAtFilter[Op.lte] != null) {
+      andParts.push({ createdAt: createdAtFilter });
+    }
     if (filter === 'active') {
       andParts.push({ isActive: true });
     } else if (filter === 'inactive') {
@@ -418,7 +500,7 @@ router.get('/users', protect, admin, async (req, res) => {
         profileInclude,
       ],
       attributes: [
-        'id', 'email', 'userType', 'isActive', 'isVerified', 'createdAt', 'lastLogin', 'credits',
+        'id', 'email', 'userType', 'isActive', 'isVerified', 'isAdminCreated', 'createdAt', 'lastLogin', 'credits',
         'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
         'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill',
         'verificationStatus', 'verifiedAt', 'verificationExpiresAt', 'reverifyRequiredAt', 'verificationProvider',
@@ -575,6 +657,7 @@ router.post(
       });
 
       const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      await recordCrmNewUserEvent(user, { source: 'crm', profile });
 
       res.status(201).json({
         message: loginEmail.sent
@@ -813,6 +896,7 @@ router.post(
       });
 
       const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      await recordCrmNewUserEvent(user, { source: 'crm', profile });
 
       res.status(201).json({
         message: loginEmail.sent
@@ -977,7 +1061,7 @@ router.put('/users/:id/toggle-active', protect, superadmin, async (req, res) => 
 // @route   PUT /api/admin/users/:id/toggle-verified
 // @desc    Toggle user verified status
 // @access  Superadmin or Viewer
-router.put('/users/:id/toggle-verified', protect, admin, async (req, res) => {
+router.put('/users/:id/toggle-verified', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
     if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
       return res.status(403).json({ message: 'You do not have permission to toggle verification' });
@@ -1364,7 +1448,7 @@ router.delete('/profiles/:userId/photo', protect, admin, async (req, res) => {
 // @route   PUT /api/admin/profiles/:userId/online
 // @desc    Set profile online status (for CRM: show user as online/offline)
 // @access  Admin only
-router.put('/profiles/:userId/online', protect, admin, async (req, res) => {
+router.put('/profiles/:userId/online', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
     const userId = req.params.userId;
     const { isOnline } = req.body;

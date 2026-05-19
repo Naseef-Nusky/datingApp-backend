@@ -31,12 +31,20 @@ export const protect = async (req, res, next) => {
 };
 
 export const admin = (req, res, next) => {
-  const adminRoles = ['admin', 'superadmin', 'moderator', 'viewer'];
+  const adminRoles = ['admin', 'superadmin', 'moderator', 'viewer', 'crm_streamer'];
   if (req.user && adminRoles.includes(req.user.userType)) {
     next();
   } else {
     res.status(403).json({ message: 'Admin access required' });
   }
+};
+
+/** Blocks CRM streamer staff from superadmin-only routes (system users, settings, etc.). */
+export const notCrmStreamerStaff = (req, res, next) => {
+  if (req.user?.userType === 'crm_streamer') {
+    return res.status(403).json({ message: 'Your role cannot access this section' });
+  }
+  next();
 };
 
 export const superadmin = (req, res, next) => {

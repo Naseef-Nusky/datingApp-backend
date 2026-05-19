@@ -18,6 +18,7 @@ import Notification from './Notification.js';
 import Report from './Report.js';
 import Block from './Block.js';
 import SystemSetting from './SystemSetting.js';
+import CrmEvent from './CrmEvent.js';
 
 // Define associations
 User.hasOne(Profile, { foreignKey: 'userId', as: 'profile' });
@@ -98,6 +99,7 @@ export {
   Report,
   Block,
   SystemSetting,
+  CrmEvent,
 };
 
 

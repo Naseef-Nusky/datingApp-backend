@@ -26,8 +26,22 @@ const User = sequelize.define(
       },
     },
     userType: {
-      type: DataTypes.ENUM('regular', 'talent', 'streamer', 'admin', 'superadmin', 'moderator', 'viewer'),
+      type: DataTypes.ENUM(
+        'regular',
+        'talent',
+        'streamer',
+        'admin',
+        'superadmin',
+        'moderator',
+        'viewer',
+        'crm_streamer'
+      ),
       defaultValue: 'regular',
+    },
+    isAdminCreated: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'is_admin_created',
     },
     isVerified: {
       type: DataTypes.BOOLEAN,

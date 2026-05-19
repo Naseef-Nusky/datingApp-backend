@@ -14,6 +14,7 @@ import { ensureVerificationStateForUser } from '../utils/userCompliance.js';
 import * as jose from 'jose';
 import jwt from 'jsonwebtoken';
 import { getSiteSettings } from '../utils/siteSettings.js';
+import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 
 const router = express.Router();
 
@@ -248,6 +249,8 @@ router.post(
         }
       );
 
+      await recordCrmNewUserEvent(user, { source: 'registration', profile });
+
       // Generate token (payload includes role for role-based UI)
       const token = generateToken(user.id, user.userType);
 
@@ -355,7 +358,7 @@ router.post(
         return res.status(401).json({ message: 'Invalid username or password' });
       }
 
-      const allowedRoles = ['admin', 'superadmin', 'moderator', 'viewer'];
+      const allowedRoles = ['admin', 'superadmin', 'moderator', 'viewer', 'crm_streamer'];
       if (!allowedRoles.includes(user.userType)) {
         return res.status(403).json({ message: 'Admin access required' });
       }
