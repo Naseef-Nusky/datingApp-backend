@@ -16,7 +16,7 @@ import { uploadToSpaces } from '../utils/spacesUpload.js';
 import { sendEmail as sendSmtpEmail, sendAddedToContactsEmail } from '../utils/emailService.js';
 import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
-import { getCreditSettings } from '../utils/creditSettings.js';
+import { getCreditSettings, getEmailSendCost, getMingleCost } from '../utils/creditSettings.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
 import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 import { isDummyUserEmail } from '../utils/dummyUser.js';
@@ -1441,6 +1441,32 @@ router.post('/mingle', protect, async (req, res) => {
       });
     }
 
+    // Pre-check credits for Let's Mingle (regular users only — streamers/talent are free)
+    let creditsUsed = 0;
+    let mingleCost = 0;
+    const isStreamerSender =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+
+    if (!isStreamerSender) {
+      mingleCost = await getMingleCost();
+      if (mingleCost > 0) {
+        const senderForCredits = await User.findByPk(req.user.id, {
+          attributes: ['id', 'credits'],
+        });
+        if (!senderForCredits) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+        const balance = senderForCredits.credits || 0;
+        if (balance < mingleCost) {
+          return res.status(400).json({
+            message: 'Insufficient credits',
+            required: mingleCost,
+            balance,
+          });
+        }
+      }
+    }
+
     // Send chat requests to all matching profiles
     const sentRequests = [];
     const failedRequests = [];
@@ -1617,13 +1643,46 @@ router.post('/mingle', protect, async (req, res) => {
 
     console.log(`✅ Mingle completed: ${sentRequests.length} sent, ${failedRequests.length} failed`);
 
-    res.status(200).json({
+    if (!isStreamerSender && mingleCost > 0 && sentRequests.length > 0) {
+      const senderForCredits = await User.findByPk(req.user.id, {
+        attributes: ['id', 'credits'],
+      });
+      if (senderForCredits) {
+        await senderForCredits.decrement('credits', { by: mingleCost });
+        creditsUsed = mingleCost;
+      }
+    }
+
+    if (creditsUsed > 0) {
+      try {
+        await CreditTransaction.create({
+          userId: req.user.id,
+          type: 'usage',
+          amount: -creditsUsed,
+          description: "Let's Mingle",
+          relatedTo: 'mingle',
+          relatedId: null,
+        });
+        await updateUserSpendAndVip(req.user.id, creditsUsed);
+      } catch (txError) {
+        console.error('Error creating credit transaction for mingle:', txError);
+      }
+    }
+
+    const responsePayload = {
       success: true,
       message: `Sent mingle message to ${sentRequests.length} profile(s)`,
       matchedProfiles: sentRequests,
       sentCount: sentRequests.length,
       failedCount: failedRequests.length,
-    });
+      creditsUsed,
+    };
+    if (creditsUsed > 0) {
+      const senderAfter = await User.findByPk(req.user.id, { attributes: ['credits'] });
+      responsePayload.senderCreditsBalance = senderAfter?.credits ?? null;
+    }
+
+    res.status(200).json(responsePayload);
   } catch (error) {
     console.error('❌ Mingle error:', error);
     console.error('Error stack:', error.stack);
@@ -1913,7 +1972,12 @@ router.get('/emails/:emailId', protect, async (req, res) => {
 
     const creditCosts = await getCreditSettings();
     const payload = email.toJSON ? email.toJSON() : { ...(email.get ? email.get({ plain: true }) : email) };
-    payload.creditCosts = { photoViewCredits: creditCosts.photoViewCredits, voiceMessageCredits: creditCosts.voiceMessageCredits };
+    payload.creditCosts = {
+      emailSendCredits: creditCosts.emailSendCredits ?? 0,
+      photoViewCredits: creditCosts.photoViewCredits,
+      videoViewCredits: creditCosts.videoViewCredits ?? creditCosts.photoViewCredits,
+      voiceMessageCredits: creditCosts.voiceMessageCredits,
+    };
     res.json(payload);
   } catch (error) {
     console.error('Get email error:', error);
@@ -2011,6 +2075,33 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       return res.status(403).json({ message: restriction.message });
     }
 
+    // Charge credits to send email (regular users only — streamers/talent are free)
+    let creditsUsed = 0;
+    const isStreamerSender =
+      req.user.userType === 'streamer' || req.user.userType === 'talent';
+
+    if (!isStreamerSender) {
+      const emailCost = await getEmailSendCost();
+      if (emailCost > 0) {
+        const senderForCredits = await User.findByPk(req.user.id, {
+          attributes: ['id', 'credits'],
+        });
+        if (!senderForCredits) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+        const balance = senderForCredits.credits || 0;
+        if (balance < emailCost) {
+          return res.status(400).json({
+            message: 'Insufficient credits',
+            required: emailCost,
+            balance,
+          });
+        }
+        await senderForCredits.decrement('credits', { by: emailCost });
+        creditsUsed = emailCost;
+      }
+    }
+
     // Get sender user with profile for email notification
     let sender;
     try {
@@ -2050,7 +2141,7 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       content: content,
       mediaUrl: uploadedMediaUrl || null,
       messageType: 'email',
-      creditsUsed: 0,
+      creditsUsed,
       attachments: attachments || null,
     };
 
@@ -2058,6 +2149,22 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
     try {
       message = await Message.create(messageData);
       console.log('✅ [SEND EMAIL] Message created with chat_id:', message.id, 'chat:', chat.id);
+
+      if (creditsUsed > 0) {
+        try {
+          await CreditTransaction.create({
+            userId: req.user.id,
+            type: 'usage',
+            amount: -creditsUsed,
+            description: 'Email sent',
+            relatedTo: 'email',
+            relatedId: message.id,
+          });
+          await updateUserSpendAndVip(req.user.id, creditsUsed);
+        } catch (txError) {
+          console.error('Error creating credit transaction for email:', txError);
+        }
+      }
     } catch (dbError) {
       console.error('❌ [SEND EMAIL] Database error creating message:', dbError);
       return res.status(500).json({ message: 'Error creating message', error: dbError.message });
@@ -2090,6 +2197,7 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
         {
           attachments: Array.isArray(message.attachments) && message.attachments.length > 0 ? message.attachments : (attachments || undefined),
           creditCosts: {
+            emailSendCredits: creditCosts.emailSendCredits ?? 0,
             photoViewCredits: creditCosts.photoViewCredits,
             videoViewCredits: creditCosts.videoViewCredits ?? creditCosts.photoViewCredits,
             voiceMessageCredits: creditCosts.voiceMessageCredits,
@@ -2192,7 +2300,16 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       ],
     });
 
-    res.status(201).json(messageWithDetails);
+    const responsePayload = messageWithDetails?.toJSON
+      ? messageWithDetails.toJSON()
+      : { ...(messageWithDetails.get ? messageWithDetails.get({ plain: true }) : messageWithDetails) };
+    responsePayload.creditsUsed = creditsUsed;
+    if (creditsUsed > 0) {
+      const senderAfter = await User.findByPk(req.user.id, { attributes: ['credits'] });
+      responsePayload.senderCreditsBalance = senderAfter?.credits ?? null;
+    }
+
+    res.status(201).json(responsePayload);
   } catch (error) {
     console.error('❌ [SEND EMAIL] Error:', error);
     console.error('❌ [SEND EMAIL] Error stack:', error.stack);

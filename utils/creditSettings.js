@@ -62,6 +62,10 @@ export const DEFAULT_REFILL_PACKS = [
 export const DEFAULT_CREDIT_SETTINGS = {
   // Cost per regular chat message (text / media) in credits
   chatMessage: 0,
+  // Cost to send one email (in-app email composer) in credits
+  emailSendCredits: 0,
+  // Cost per Let's Mingle action (one broadcast to matching profiles)
+  mingleCredits: 0,
   // Cost per started minute of voice call in credits
   voiceCallPerMinute: 0,
   // Cost per started minute of video call in credits
@@ -92,6 +96,28 @@ export const getCreditSettings = async () => {
   } catch (error) {
     console.error('Error loading credit settings, using defaults:', error.message);
     return { ...DEFAULT_CREDIT_SETTINGS };
+  }
+};
+
+export const getEmailSendCost = async () => {
+  try {
+    const settings = await getCreditSettings();
+    const cost = parseInt(settings.emailSendCredits, 10);
+    return Number.isFinite(cost) && cost > 0 ? cost : 0;
+  } catch (error) {
+    console.error('Error getting email send credit cost:', error.message);
+    return 0;
+  }
+};
+
+export const getMingleCost = async () => {
+  try {
+    const settings = await getCreditSettings();
+    const cost = parseInt(settings.mingleCredits, 10);
+    return Number.isFinite(cost) && cost > 0 ? cost : 0;
+  } catch (error) {
+    console.error('Error getting mingle credit cost:', error.message);
+    return 0;
   }
 };
 

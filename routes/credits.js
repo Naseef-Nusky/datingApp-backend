@@ -157,6 +157,28 @@ router.get('/subscription-modal', async (req, res) => {
   }
 });
 
+// @route   GET /api/credits/service-costs
+// @desc    Credit costs for chat, email send, email attachment unlocks (CRM-configured)
+// @access  Private
+router.get('/service-costs', protect, async (req, res) => {
+  try {
+    const settings = await getCreditSettings();
+    res.json({
+      chatMessage: settings.chatMessage ?? 0,
+      emailSendCredits: settings.emailSendCredits ?? 0,
+      mingleCredits: settings.mingleCredits ?? 0,
+      photoViewCredits: settings.photoViewCredits ?? 15,
+      videoViewCredits: settings.videoViewCredits ?? settings.photoViewCredits ?? 15,
+      voiceMessageCredits: settings.voiceMessageCredits ?? 10,
+      voiceCallPerMinute: settings.voiceCallPerMinute ?? 0,
+      videoCallPerMinute: settings.videoCallPerMinute ?? 0,
+    });
+  } catch (error) {
+    console.error('Get service costs error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET /api/credits/refill-packs
 // @desc    Get one-time refill credit packs for refill popup – editable from CRM
 // @access  Private (user must be logged in to see refill packs)

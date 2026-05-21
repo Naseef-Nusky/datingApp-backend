@@ -2547,6 +2547,8 @@ router.put(
   admin,
   [
     body('chatMessage').optional().isInt({ min: 0 }).withMessage('chatMessage must be a non-negative integer'),
+    body('emailSendCredits').optional().isInt({ min: 0 }).withMessage('emailSendCredits must be a non-negative integer'),
+    body('mingleCredits').optional().isInt({ min: 0 }).withMessage('mingleCredits must be a non-negative integer'),
     body('voiceCallPerMinute').optional().isInt({ min: 0 }).withMessage('voiceCallPerMinute must be a non-negative integer'),
     body('videoCallPerMinute').optional().isInt({ min: 0 }).withMessage('videoCallPerMinute must be a non-negative integer'),
     body('photoViewCredits').optional().isInt({ min: 0 }).withMessage('photoViewCredits must be a non-negative integer'),
@@ -2564,6 +2566,12 @@ router.put(
       const partial = {};
       if (req.body.chatMessage != null) {
         partial.chatMessage = parseInt(req.body.chatMessage, 10) || 0;
+      }
+      if (req.body.emailSendCredits != null) {
+        partial.emailSendCredits = parseInt(req.body.emailSendCredits, 10) || 0;
+      }
+      if (req.body.mingleCredits != null) {
+        partial.mingleCredits = parseInt(req.body.mingleCredits, 10) || 0;
       }
       if (req.body.voiceCallPerMinute != null) {
         partial.voiceCallPerMinute = parseInt(req.body.voiceCallPerMinute, 10) || 0;
