@@ -23,13 +23,14 @@ import {
   ChatRequest,
   CallRequest,
   EngagementSession,
+  NewUserStreamerEmail,
   Story,
   CreditTransaction,
   Block,
 } from '../models/index.js';
 import { protect, admin, superadmin, notCrmStreamerStaff } from '../middleware/auth.js';
 import { excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
-import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
+import { recordCrmNewUserEvent, sanitizeCrmEventForClient } from '../utils/crmEvents.js';
 import { parseLocalDateQuery } from '../utils/dateQuery.js';
 import CrmEvent from '../models/CrmEvent.js';
 import { Op } from 'sequelize';
@@ -42,6 +43,7 @@ import {
   DEFAULT_SITE_SETTINGS,
 } from '../utils/siteSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
+import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
   formatDuration,
@@ -52,6 +54,45 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = express.Router();
+
+/** Remove rows that reference a user before hard-deleting the user record. */
+const purgeUserRelatedRecords = async (userId) => {
+  await Message.destroy({
+    where: { [Op.or]: [{ sender: userId }, { receiver: userId }] },
+  });
+  await ChatRequest.destroy({
+    where: { [Op.or]: [{ senderId: userId }, { receiverId: userId }] },
+  });
+  await CallRequest.destroy({
+    where: { [Op.or]: [{ callerId: userId }, { receiverId: userId }] },
+  });
+  await Gift.destroy({
+    where: { [Op.or]: [{ sender: userId }, { receiver: userId }] },
+  });
+  await CreditTransaction.destroy({ where: { userId } });
+  await Notification.destroy({ where: { userId } });
+  await Report.destroy({
+    where: { [Op.or]: [{ reporter: userId }, { reportedUser: userId }] },
+  });
+  await Block.destroy({
+    where: { [Op.or]: [{ blocker: userId }, { blocked: userId }] },
+  });
+  await Match.destroy({
+    where: { [Op.or]: [{ user1: userId }, { user2: userId }] },
+  });
+  await Story.destroy({ where: { userId } });
+  await Chat.destroy({
+    where: { [Op.or]: [{ user1Id: userId }, { user2Id: userId }] },
+  });
+  await EngagementSession.destroy({
+    where: { [Op.or]: [{ streamerId: userId }, { memberId: userId }] },
+  });
+  await CrmEvent.destroy({ where: { userId } });
+  await NewUserStreamerEmail.destroy({
+    where: { [Op.or]: [{ newUserId: userId }, { streamerUserId: userId }] },
+  });
+  await Profile.destroy({ where: { userId } });
+};
 
 const sendCrmCreatedUserLoginLink = async (userId, email, firstName) => {
   try {
@@ -357,11 +398,14 @@ router.get('/crm-events', protect, admin, async (req, res) => {
     const where = unreadOnly ? { readAt: null } : {};
     const events = await CrmEvent.findAll({
       where,
-      order: [['created_at', 'DESC']],
+      order: [['createdAt', 'DESC']],
       limit,
     });
     const unreadCount = await CrmEvent.count({ where: { readAt: null } });
-    res.json({ events, unreadCount });
+    res.json({
+      events: events.map(sanitizeCrmEventForClient),
+      unreadCount,
+    });
   } catch (error) {
     console.error('Error fetching CRM events:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -374,7 +418,7 @@ router.patch('/crm-events/:id/read', protect, admin, async (req, res) => {
     if (!event) return res.status(404).json({ message: 'Event not found' });
     event.readAt = new Date();
     await event.save();
-    res.json({ event });
+    res.json({ event: sanitizeCrmEventForClient(event) });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -658,6 +702,7 @@ router.post(
 
       const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
       await recordCrmNewUserEvent(user, { source: 'crm', profile });
+      const streamerWelcomeEmail = await scheduleNewUserStreamerEmail(user, profile);
 
       res.status(201).json({
         message: loginEmail.sent
@@ -675,6 +720,7 @@ router.post(
         },
         loginEmailSent: loginEmail.sent,
         loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        streamerWelcomeEmail,
         ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
       });
     } catch (error) {
@@ -897,6 +943,7 @@ router.post(
 
       const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
       await recordCrmNewUserEvent(user, { source: 'crm', profile });
+      const streamerWelcomeEmail = await scheduleNewUserStreamerEmail(user, profile);
 
       res.status(201).json({
         message: loginEmail.sent
@@ -914,6 +961,7 @@ router.post(
         },
         loginEmailSent: loginEmail.sent,
         loginEmailError: loginEmail.sent ? null : loginEmail.error,
+        streamerWelcomeEmail,
         ...(loginEmail.devLoginLink ? { _devLoginLink: loginEmail.devLoginLink } : {}),
       });
     } catch (error) {
@@ -1123,80 +1171,7 @@ router.delete('/users/:id', protect, superadmin, async (req, res) => {
       return res.status(400).json({ message: 'Cannot delete admin users via this endpoint' });
     }
 
-    // Clean up all related data that references this user to satisfy foreign keys
-    // Messages where user is sender or receiver
-    await Message.destroy({
-      where: {
-        [Op.or]: [{ sender: id }, { receiver: id }],
-      },
-    });
-
-    // Chat requests where user is sender or receiver
-    await ChatRequest.destroy({
-      where: {
-        [Op.or]: [{ senderId: id }, { receiverId: id }],
-      },
-    });
-
-    // Call requests where user is caller or receiver
-    await CallRequest.destroy({
-      where: {
-        [Op.or]: [{ callerId: id }, { receiverId: id }],
-      },
-    });
-
-    // Gifts sent or received by this user
-    await Gift.destroy({
-      where: {
-        [Op.or]: [{ sender: id }, { receiver: id }],
-      },
-    });
-
-    // Credit transactions for this user
-    await CreditTransaction.destroy({
-      where: { userId: id },
-    });
-
-    // Notifications for this user
-    await Notification.destroy({
-      where: { userId: id },
-    });
-
-    // Reports where user is reporter or reported
-    await Report.destroy({
-      where: {
-        [Op.or]: [{ reporter: id }, { reportedUser: id }],
-      },
-    });
-
-    // Blocks involving this user
-    await Block.destroy({
-      where: {
-        [Op.or]: [{ blocker: id }, { blocked: id }],
-      },
-    });
-
-    // Matches involving this user
-    await Match.destroy({
-      where: {
-        [Op.or]: [{ user1: id }, { user2: id }],
-      },
-    });
-
-    // Stories created by this user
-    await Story.destroy({
-      where: { userId: id },
-    });
-
-    // Chats where this user participates
-    await Chat.destroy({
-      where: {
-        [Op.or]: [{ user1Id: id }, { user2Id: id }],
-      },
-    });
-
-    // Delete profile last (if exists)
-    await Profile.destroy({ where: { userId: id } });
+    await purgeUserRelatedRecords(id);
 
     // Finally delete the user record (hard delete)
     await user.destroy();
@@ -1237,30 +1212,7 @@ router.delete('/users', protect, superadmin, async (req, res) => {
     for (const user of users) {
       const id = user.id;
 
-      // Messages where user is sender or receiver
-      await Message.destroy({ where: { [Op.or]: [{ sender: id }, { receiver: id }] } });
-      // Chat requests where user is sender or receiver
-      await ChatRequest.destroy({ where: { [Op.or]: [{ senderId: id }, { receiverId: id }] } });
-      // Call requests where user is caller or receiver
-      await CallRequest.destroy({ where: { [Op.or]: [{ callerId: id }, { receiverId: id }] } });
-      // Gifts sent or received by this user
-      await Gift.destroy({ where: { [Op.or]: [{ sender: id }, { receiver: id }] } });
-      // Credit transactions for this user
-      await CreditTransaction.destroy({ where: { userId: id } });
-      // Notifications for this user
-      await Notification.destroy({ where: { userId: id } });
-      // Reports where user is reporter or reported
-      await Report.destroy({ where: { [Op.or]: [{ reporter: id }, { reportedUser: id }] } });
-      // Blocks involving this user
-      await Block.destroy({ where: { [Op.or]: [{ blocker: id }, { blocked: id }] } });
-      // Matches involving this user
-      await Match.destroy({ where: { [Op.or]: [{ user1: id }, { user2: id }] } });
-      // Stories created by this user
-      await Story.destroy({ where: { userId: id } });
-      // Chats where this user participates
-      await Chat.destroy({ where: { [Op.or]: [{ user1Id: id }, { user2Id: id }] } });
-      // Delete profile and user
-      await Profile.destroy({ where: { userId: id } });
+      await purgeUserRelatedRecords(id);
       await user.destroy();
 
       deletedCount++;
@@ -2532,6 +2484,8 @@ router.put(
     body('maxUploadSize').optional().isInt({ min: 1, max: 500 }),
     body('enableNotifications').optional().isBoolean(),
     body('maintenanceMessage').optional().isString().trim().isLength({ max: 2000 }),
+    body('enableNewUserStreamerEmail').optional().isBoolean(),
+    body('newUserStreamerEmailDelayMinutes').optional().isInt({ min: 1, max: 1440 }),
   ],
   async (req, res) => {
     try {
@@ -2553,6 +2507,14 @@ router.put(
       }
       if (req.body.maintenanceMessage != null) {
         partial.maintenanceMessage = String(req.body.maintenanceMessage).trim().slice(0, 2000);
+      }
+      if (req.body.enableNewUserStreamerEmail != null) {
+        partial.enableNewUserStreamerEmail = Boolean(req.body.enableNewUserStreamerEmail);
+      }
+      if (req.body.newUserStreamerEmailDelayMinutes != null) {
+        partial.newUserStreamerEmailDelayMinutes =
+          parseInt(req.body.newUserStreamerEmailDelayMinutes, 10) ||
+          DEFAULT_SITE_SETTINGS.newUserStreamerEmailDelayMinutes;
       }
       const settings = await updateSiteSettings(partial);
       res.json({ settings });

@@ -557,7 +557,7 @@ export const sendOnlineNotification = async (recipientEmail, onlineUserData) => 
 /**
  * Send email using SendGrid
  */
-export const sendEmail = async (to, subject, htmlContent, textContent = null, trackingData = {}) => {
+export const sendEmail = async (to, subject, htmlContent, textContent = null, trackingData = {}, mailOptions = {}) => {
   try {
     if (!process.env.SENDGRID_API_KEY) {
       console.warn('⚠️ SendGrid API key not configured. Email will not be sent.');
@@ -602,13 +602,22 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       'X-Auto-Response-Suppress': 'OOF, AutoReply',
     };
 
+    const fromName =
+      typeof mailOptions.fromName === 'string' && mailOptions.fromName.trim()
+        ? mailOptions.fromName.trim()
+        : FROM_NAME;
+    const replyTo =
+      typeof mailOptions.replyTo === 'string' && mailOptions.replyTo.includes('@')
+        ? mailOptions.replyTo.trim()
+        : REPLY_TO || undefined;
+
     const msg = {
       to,
       from: {
         email: FROM_EMAIL,
-        name: FROM_NAME,
+        name: fromName,
       },
-      replyTo: REPLY_TO || undefined,
+      replyTo: replyTo || undefined,
       subject,
       html: htmlContent,
       text: plainText,

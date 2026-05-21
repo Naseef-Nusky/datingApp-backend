@@ -1,10 +1,48 @@
+import { Op } from 'sequelize';
 import CrmEvent from '../models/CrmEvent.js';
 import Profile from '../models/Profile.js';
+
+/** Name only for CRM bell — never expose email in API/UI. */
+export function crmEventDisplayName(event) {
+  let raw = String(event?.message || '').trim();
+
+  if (!raw || raw.includes('@')) {
+    const fromTitle = String(event?.title || '')
+      .replace(/^(User added in CRM|New registration|New user added):\s*/i, '')
+      .trim();
+    raw = fromTitle || raw;
+  }
+
+  raw = raw.replace(/\s*\([^)]*@[^)]*\)/g, '').trim();
+  raw = raw.replace(/\s*\S+@\S+\.\S+/g, '').trim();
+  raw = raw.replace(/\s*(was created by staff|signed up on the app)\.?$/i, '').trim();
+
+  if (raw.includes('@')) {
+    const beforeParen = raw.split('(')[0].trim();
+    raw = beforeParen && !beforeParen.includes('@') ? beforeParen : '';
+  }
+
+  return raw || 'Member';
+}
+
+export function sanitizeCrmEventForClient(event) {
+  const json = event?.toJSON ? event.toJSON() : { ...event };
+  return {
+    id: json.id,
+    eventType: json.eventType,
+    userId: json.userId,
+    title: 'New user added',
+    message: crmEventDisplayName(json),
+    readAt: json.readAt,
+    createdAt: json.createdAt,
+  };
+}
 
 export async function recordCrmNewUserEvent(user, options = {}) {
   if (!user?.id) return null;
 
   const source = options.source || 'registration';
+
   let profile = options.profile;
   if (!profile) {
     profile = await Profile.findOne({
@@ -14,21 +52,23 @@ export async function recordCrmNewUserEvent(user, options = {}) {
   }
 
   const name =
-    [profile?.firstName, profile?.lastName].filter(Boolean).join(' ').trim() ||
-    user.email?.split('@')[0] ||
-    'New member';
+    [profile?.firstName, profile?.lastName].filter(Boolean).join(' ').trim() || 'New member';
 
-  const title =
-    source === 'crm'
-      ? `User added in CRM: ${name}`
-      : `New registration: ${name}`;
-
-  const message =
-    source === 'crm'
-      ? `${name} (${user.email}) was created by staff.`
-      : `${name} (${user.email}) signed up on the app.`;
+  const title = 'New user added';
+  const message = name;
 
   try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentDuplicate = await CrmEvent.findOne({
+      where: {
+        eventType: 'new_user',
+        userId: user.id,
+        createdAt: { [Op.gte]: since },
+      },
+      attributes: ['id'],
+    });
+    if (recentDuplicate) return recentDuplicate;
+
     return await CrmEvent.create({
       eventType: 'new_user',
       userId: user.id,
@@ -36,8 +76,7 @@ export async function recordCrmNewUserEvent(user, options = {}) {
       message,
       payload: {
         source,
-        userType: user.userType,
-        email: user.email,
+        userId: user.id,
       },
     });
   } catch (err) {

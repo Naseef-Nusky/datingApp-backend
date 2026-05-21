@@ -36,11 +36,15 @@ const CrmEvent = sequelize.define(
       allowNull: true,
       field: 'read_at',
     },
+    createdAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      field: 'created_at',
+    },
   },
   {
     tableName: 'crm_events',
     timestamps: true,
-    createdAt: 'created_at',
     updatedAt: false,
   }
 );

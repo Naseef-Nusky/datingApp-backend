@@ -27,12 +27,12 @@ const transporter = nodemailer.createTransport({
  * @param {Array} attachments - Array of attachment objects (optional; SMTP only)
  * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
  */
-export const sendEmail = async (to, subject, htmlContent, textContent = null, attachments = []) => {
+export const sendEmail = async (to, subject, htmlContent, textContent = null, attachments = [], mailOptions = {}) => {
   try {
     // Prefer SendGrid in production (and when configured) – no SMTP needed
     if (process.env.SENDGRID_API_KEY) {
       const { sendEmail: sendGridSend } = await import('./sendgridService.js');
-      const result = await sendGridSend(to, subject, htmlContent, textContent);
+      const result = await sendGridSend(to, subject, htmlContent, textContent, {}, mailOptions);
       if (result.success) {
         console.log('✅ Email sent via SendGrid:', result.messageId);
       }
@@ -45,16 +45,24 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, at
       return { success: false, error: 'SMTP not configured' };
     }
 
-    const mailOptions = {
-      from: `"${process.env.SMTP_FROM_NAME || 'Vantage Dating'}" <${process.env.SMTP_USER}>`,
+    const fromDisplay =
+      typeof mailOptions.fromName === 'string' && mailOptions.fromName.trim()
+        ? mailOptions.fromName.trim()
+        : process.env.SMTP_FROM_NAME || 'Vantage Dating';
+
+    const smtpMail = {
+      from: `"${fromDisplay}" <${process.env.SMTP_USER}>`,
       to: to,
       subject: subject,
       html: htmlContent,
       text: textContent || htmlContent.replace(/<[^>]*>/g, ''), // Strip HTML for text version
       attachments: attachments,
     };
+    if (mailOptions.replyTo && String(mailOptions.replyTo).includes('@')) {
+      smtpMail.replyTo = mailOptions.replyTo;
+    }
 
-    const info = await transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(smtpMail);
     console.log('✅ Email sent successfully (SMTP):', info.messageId);
     return { success: true, messageId: info.messageId };
   } catch (error) {
@@ -521,11 +529,118 @@ export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineU
   );
 };
 
+/**
+ * Delayed welcome-style email to a new member (streamer featured in body).
+ * Sent from the platform as "Vantage Dating Team" — not the streamer's name in From.
+ */
+export const sendStreamerReadyToChatEmail = async (
+  to,
+  recipientName,
+  streamer,
+  chatUrl,
+  options = {}
+) => {
+  const appName = process.env.SMTP_FROM_NAME || process.env.SENDGRID_FROM_NAME || 'Vantage Dating';
+  const teamFromName =
+    process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating Team';
+  const logoUrl = EMAIL_LOGO_URL;
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const streamerName = streamer?.firstName || 'Someone';
+  const safeRecipient = recipientName || 'there';
+  const photoUrl = streamer?.photoUrl || `${frontendUrl}/profile.png`;
+  const fromName = teamFromName;
+  const subject = `${streamerName} is ready to chat with you`;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #fff; }
+    .header { padding: 20px 24px 14px; border-bottom: 3px solid #B5458F; text-align: center; }
+    .logo { max-width: 140px; height: auto; display: inline-block; }
+    .content { padding: 24px; }
+    h1 { margin: 0 0 16px; font-size: 24px; color: #1a1a1a; text-align: center; }
+    p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; }
+    .card { border: 1px solid #e8e8e8; border-radius: 12px; margin: 20px 0; background: #fafafa; }
+    .photo-wrap { text-align: center; padding: 20px 20px 8px; }
+    .profile-photo {
+      width: 100px; height: 100px; max-width: 100px; max-height: 100px;
+      border-radius: 12px; object-fit: cover; display: inline-block;
+      border: 3px solid #B5458F;
+    }
+    .card-body { padding: 8px 20px 24px; text-align: center; }
+    .streamer-name { font-size: 20px; font-weight: 700; color: #5A2D8A; margin: 0 0 8px; }
+    .cta-wrap { text-align: center; margin-top: 16px; }
+    .cta {
+      display: inline-block;
+      background-color: #B5458F;
+      background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672);
+      color: #ffffff !important;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 14px 32px;
+      border-radius: 8px;
+    }
+    .footer {
+      padding: 20px 24px 28px;
+      text-align: center;
+      font-size: 13px;
+      color: #888;
+      border-top: 1px solid #eee;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${appName}" class="logo" />
+    </div>
+    <div class="content">
+      <h1>Hi ${safeRecipient}, someone special is waiting for you</h1>
+      <p style="text-align:center;"><strong>${streamerName}</strong> is <strong>online now</strong> and <strong>ready to take your messages</strong> — say hello while they are available.</p>
+      <div class="card">
+        <div class="photo-wrap">
+          <img src="${photoUrl}" alt="${streamerName}" class="profile-photo" width="100" height="100" />
+        </div>
+        <div class="card-body">
+          <p class="streamer-name">${streamerName}</p>
+          <p style="margin:0;color:#444;">I'm online now and would love to chat with you.</p>
+          <div class="cta-wrap">
+            <a class="cta" href="${chatUrl}" style="background-color:#B5458F;color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;padding:14px 32px;border-radius:8px;display:inline-block;">Chat with ${streamerName}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="footer">${teamFromName}</div>
+  </div>
+</body>
+</html>
+  `;
+
+  const textContent = `Hi ${safeRecipient}, ${streamerName} is ready to chat with you on ${appName}. Open: ${chatUrl}`;
+
+  const mailOpts = { fromName };
+  const platformReply =
+    process.env.SENDGRID_REPLY_TO ||
+    process.env.SUPPORT_EMAIL ||
+    process.env.SENDGRID_FROM_EMAIL;
+  if (platformReply && String(platformReply).includes('@')) {
+    mailOpts.replyTo = platformReply;
+  }
+
+  return await sendEmail(to, subject, htmlContent, textContent, [], mailOpts);
+};
+
 export default {
   sendEmail,
   sendEmailNotification,
   sendLoginLinkEmail,
   sendUserOnlineNotificationEmail,
+  sendStreamerReadyToChatEmail,
   sendProfileViewNotificationEmail,
   sendProfileViewsBatchEmail,
   sendAddedToContactsEmail,

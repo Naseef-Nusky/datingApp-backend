@@ -26,7 +26,11 @@ import {
   closeStaleChatSessions,
 } from './utils/engagementTracking.js';
 import { enforceApiMaintenanceMode } from './middleware/maintenanceMode.js';
-import { checkFreeToFreeRestriction } from './utils/userCompliance.js';
+import {
+  checkFreeToFreeRestriction,
+  expireVerificationSweep,
+  enforceFreeUserEligibilitySweep,
+} from './utils/userCompliance.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -878,6 +882,13 @@ const startServer = async () => {
       startDailyDigestScheduler();
     } catch (error) {
       console.warn('⚠️ Could not start daily digest scheduler:', error.message);
+    }
+
+    try {
+      const { startNewUserStreamerEmailScheduler } = await import('./utils/newUserStreamerEmail.js');
+      startNewUserStreamerEmailScheduler();
+    } catch (error) {
+      console.warn('⚠️ Could not start new-user streamer email scheduler:', error.message);
     }
 
     // Close idle chat engagement sessions every 2 minutes

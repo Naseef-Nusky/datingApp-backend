@@ -19,6 +19,7 @@ import Report from './Report.js';
 import Block from './Block.js';
 import SystemSetting from './SystemSetting.js';
 import CrmEvent from './CrmEvent.js';
+import NewUserStreamerEmail from './NewUserStreamerEmail.js';
 
 // Define associations
 User.hasOne(Profile, { foreignKey: 'userId', as: 'profile' });
@@ -78,6 +79,9 @@ Report.belongsTo(User, { foreignKey: 'reportedUser', as: 'reportedUserData' });
 Block.belongsTo(User, { foreignKey: 'blocker', as: 'blockerData' });
 Block.belongsTo(User, { foreignKey: 'blocked', as: 'blockedData' });
 
+NewUserStreamerEmail.belongsTo(User, { foreignKey: 'newUserId', as: 'newUser' });
+NewUserStreamerEmail.belongsTo(User, { foreignKey: 'streamerUserId', as: 'streamer' });
+
 export {
   sequelize,
   User,
@@ -100,6 +104,7 @@ export {
   Block,
   SystemSetting,
   CrmEvent,
+  NewUserStreamerEmail,
 };
 
 

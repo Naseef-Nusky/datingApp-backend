@@ -15,6 +15,7 @@ import * as jose from 'jose';
 import jwt from 'jsonwebtoken';
 import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
+import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 
 const router = express.Router();
 
@@ -250,6 +251,10 @@ router.post(
       );
 
       await recordCrmNewUserEvent(user, { source: 'registration', profile });
+
+      scheduleNewUserStreamerEmail(user, profile).catch((err) =>
+        console.error('scheduleNewUserStreamerEmail:', err.message)
+      );
 
       // Generate token (payload includes role for role-based UI)
       const token = generateToken(user.id, user.userType);
@@ -642,7 +647,18 @@ router.put('/me/registration-complete', protect, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+    const wasIncomplete = user.registrationComplete === false;
     await user.update({ registrationComplete: true });
+
+    // Magic-link signups finish onboarding here (not via POST /register).
+    if (wasIncomplete && user.userType === 'regular') {
+      const profile = await Profile.findOne({ where: { userId: user.id } });
+      await recordCrmNewUserEvent(user, { source: 'registration', profile });
+      scheduleNewUserStreamerEmail(user, profile).catch((err) =>
+        console.error('scheduleNewUserStreamerEmail:', err.message)
+      );
+    }
+
     res.json({ registrationComplete: true });
   } catch (error) {
     console.error('Registration complete error:', error);
