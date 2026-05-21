@@ -247,13 +247,15 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
       return returnPath;
     };
     const safeReturnPath = getSafeReturnPath();
+    // Stripe replaces {CHECKOUT_SESSION_ID} only when it appears literally in success_url
+    // (URL.searchParams encodes braces and breaks substitution).
     const buildRedirectUrl = (status) => {
-      const redirectUrl = new URL(safeReturnPath, `${frontendUrl}/`);
-      redirectUrl.searchParams.set('refill', status);
+      const path = safeReturnPath.startsWith('/') ? safeReturnPath : `/${safeReturnPath}`;
+      const joiner = path.includes('?') ? '&' : '?';
       if (status === 'success') {
-        redirectUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+        return `${frontendUrl}${path}${joiner}refill=success&session_id={CHECKOUT_SESSION_ID}`;
       }
-      return redirectUrl.toString();
+      return `${frontendUrl}${path}${joiner}refill=cancelled`;
     };
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
