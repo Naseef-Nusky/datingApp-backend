@@ -627,6 +627,8 @@ router.get('/me', protect, async (req, res) => {
         userType: user.userType,
         credits: user.credits,
         subscriptionPlan: user.subscriptionPlan,
+        subscriptionExpires: user.subscriptionExpires,
+        subscriptionEndsAt: user.subscriptionEndsAt,
         isVerified: user.isVerified,
         verificationStatus: user.verificationStatus,
         verifiedAt: user.verifiedAt,
