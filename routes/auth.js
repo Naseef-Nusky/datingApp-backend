@@ -775,9 +775,9 @@ router.post(
         if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(scheme)) {
           return res.status(500).json({ message: 'Invalid IOS_APP_LOGIN_SCHEME server configuration.' });
         }
-        loginUrl = `${scheme}://auth/login-callback?token=${rawToken}`;
+        loginUrl = `${scheme}://auth/login-callback?token=${encodeURIComponent(rawToken)}`;
       } else {
-        loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+        loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
       }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
@@ -1156,7 +1156,7 @@ router.get('/google/callback', async (req, res) => {
       { where: { id: user.id } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
 

@@ -110,7 +110,7 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName) => {
       { where: { id: userId } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${rawToken}`;
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
 
