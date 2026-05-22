@@ -35,6 +35,13 @@ import { parseLocalDateQuery } from '../utils/dateQuery.js';
 import CrmEvent from '../models/CrmEvent.js';
 import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
+import {
+  CRM_SYSTEM_USER_TYPES,
+  findCrmStaffByEmail,
+  findRegularMemberByEmail,
+  findStreamerByEmail,
+  normalizeEmail,
+} from '../utils/userEmailScope.js';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 import {
@@ -157,8 +164,6 @@ const profilePhotoUpload = multer({
 // Admin Users Routes (for managing admin accounts)
 // ============================================
 
-const CRM_SYSTEM_USER_TYPES = ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'];
-
 // @route   GET /api/admin/admins
 // @desc    Get all admin users (superadmin, admin, moderator, viewer)
 // @access  Admin only
@@ -215,37 +220,52 @@ router.post(
   superadmin,
   notCrmStreamerStaff,
   [
-    body('email').isEmail().normalizeEmail(),
-    body('password').optional().isLength({ min: 6 }),
-    body('firstName').trim().notEmpty(),
-    body('role').isIn(['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer']),
+    body('email')
+      .trim()
+      .isEmail()
+      .withMessage('Enter a valid email address (e.g. staff@yourcompany.com)')
+      .normalizeEmail(),
+    body('password')
+      .trim()
+      .notEmpty()
+      .withMessage('Password is required')
+      .isLength({ min: 6 })
+      .withMessage('Password must be at least 6 characters'),
+    body('firstName').optional({ values: 'falsy' }).trim(),
+    body('lastName').optional({ values: 'falsy' }).trim(),
+    body('role')
+      .default('admin')
+      .isIn(['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'])
+      .withMessage('Select a valid role'),
   ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        const details = errors.array().map((e) => e.msg).join('; ');
+        return res.status(400).json({ message: details, errors: errors.array() });
       }
 
       const { email, password, firstName, lastName, role } = req.body;
+      const emailNormalized = email.toLowerCase().trim();
+      const displayFirstName =
+        (firstName && String(firstName).trim()) ||
+        emailNormalized.split('@')[0] ||
+        'Admin';
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
 
-      // Check if user already exists
-      const existingUser = await User.findOne({
-        where: {
-          email: email.toLowerCase().trim(),
-        },
-      });
-
-      if (existingUser) {
-        return res.status(400).json({ message: 'Email address already registered' });
+      const existingCrmStaff = await findCrmStaffByEmail(User, emailNormalized);
+      if (existingCrmStaff) {
+        return res.status(400).json({
+          message: 'A CRM system user with this email already exists. Choose another role or edit the existing account.',
+        });
       }
 
       // Create admin user
       const adminUser = await User.create({
-        email: email.toLowerCase().trim(),
+        email: emailNormalized,
         password: passwordToSet, // Will be hashed by User model hooks
         userType: role || 'admin',
         isVerified: true,
@@ -255,7 +275,7 @@ router.post(
       // Create profile
       await Profile.create({
         userId: adminUser.id,
-        firstName: firstName.trim(),
+        firstName: displayFirstName.trim(),
         lastName: lastName?.trim() || '',
         age: 30,
         gender: 'other',
@@ -272,6 +292,9 @@ router.post(
       });
     } catch (error) {
       console.error('Error creating admin user:', error);
+      if (error?.name === 'SequelizeUniqueConstraintError') {
+        return res.status(400).json({ message: 'Email address already registered' });
+      }
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }
@@ -294,7 +317,8 @@ router.put(
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
+        const details = errors.array().map((e) => e.msg).join('; ');
+        return res.status(400).json({ message: details, errors: errors.array() });
       }
 
       const { id } = req.params;
@@ -371,6 +395,10 @@ router.delete('/admins/:id', protect, superadmin, async (req, res) => {
 
     if (!CRM_SYSTEM_USER_TYPES.includes(adminUser.userType)) {
       return res.status(400).json({ message: 'User is not a system user' });
+    }
+
+    if (adminUser.userType === 'superadmin') {
+      return res.status(400).json({ message: 'Super Admin accounts cannot be deleted' });
     }
 
     // Delete profile first (if exists)
@@ -645,9 +673,9 @@ router.post(
           ? passwordRaw.trim()
           : crypto.randomBytes(24).toString('hex');
 
-      const existingUser = await User.findOne({ where: { email } });
-      if (existingUser) {
-        return res.status(400).json({ message: 'Email address already registered' });
+      const existingMember = await findRegularMemberByEmail(User, email);
+      if (existingMember) {
+        return res.status(400).json({ message: 'A member account with this email already exists' });
       }
 
       const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
@@ -777,9 +805,9 @@ router.post(
           ? passwordRaw.trim()
           : crypto.randomBytes(24).toString('hex');
 
-      const existingUser = await User.findOne({ where: { email } });
-      if (existingUser) {
-        return res.status(400).json({ message: 'Email address already registered' });
+      const existingStreamer = await findStreamerByEmail(User, email);
+      if (existingStreamer) {
+        return res.status(400).json({ message: 'A streamer account with this email already exists' });
       }
 
       const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
@@ -899,20 +927,15 @@ router.post(
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
 
-      // Check if user already exists
-      const existingUser = await User.findOne({
-        where: {
-          email: email.toLowerCase().trim(),
-        },
-      });
-
-      if (existingUser) {
-        return res.status(400).json({ message: 'Email address already registered' });
+      const emailNorm = normalizeEmail(email);
+      const existingMember = await findRegularMemberByEmail(User, emailNorm);
+      if (existingMember) {
+        return res.status(400).json({ message: 'A member account with this email already exists' });
       }
 
       // Create user
       const user = await User.create({
-        email: email.toLowerCase().trim(),
+        email: emailNorm,
         password: passwordToSet, // Will be hashed by User model hooks
         userType: 'regular',
         // Real users should also start unverified unless explicitly verified later.
@@ -1006,14 +1029,13 @@ router.post(
       const passwordToSet = (password && typeof password === 'string' && password.trim().length >= 6)
         ? password.trim()
         : crypto.randomBytes(24).toString('hex');
-      const existingUser = await User.findOne({
-        where: { email: email.toLowerCase().trim() },
-      });
-      if (existingUser) {
-        return res.status(400).json({ message: 'Email address already registered' });
+      const emailNorm = normalizeEmail(email);
+      const existingStreamer = await findStreamerByEmail(User, emailNorm);
+      if (existingStreamer) {
+        return res.status(400).json({ message: 'A streamer account with this email already exists' });
       }
       const user = await User.create({
-        email: email.toLowerCase().trim(),
+        email: emailNorm,
         password: passwordToSet,
         userType: 'streamer',
         // New streamers should not be auto-verified.

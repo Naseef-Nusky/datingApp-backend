@@ -16,10 +16,19 @@ import jwt from 'jsonwebtoken';
 import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
+import {
+  findCrmStaffByEmail,
+  findRegularMemberByEmail,
+  isCrmSystemUser,
+  normalizeEmail,
+} from '../utils/userEmailScope.js';
 
 const router = express.Router();
 
 const STAFF_USER_TYPES = ['admin', 'superadmin', 'moderator', 'viewer'];
+
+const frontendLoginForbiddenMessage =
+  'This account is for CRM staff only. Please sign in at the CRM admin panel.';
 
 async function assertAllowRegistrations(res) {
   const site = await getSiteSettings();
@@ -198,19 +207,11 @@ router.post(
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
-      // Check if user with this email already exists (case-insensitive)
-      const userExists = await User.findOne({
-        where: {
-          email: {
-            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
-          }
-        }
-      });
-
-      if (userExists) {
+      const memberExists = await findRegularMemberByEmail(User, normalizedEmail);
+      if (memberExists) {
         return res.status(400).json({
-          message: 'Email address already registered',
-          field: 'email'
+          message: 'Email address already registered for a member account',
+          field: 'email',
         });
       }
 
@@ -301,19 +302,11 @@ router.post(
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
-      // Check if user with this email already exists (case-insensitive)
-      const userExists = await User.findOne({ 
-        where: { 
-          email: {
-            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
-          }
-        } 
-      });
-
-      if (userExists) {
-        return res.status(200).json({ 
+      const memberExists = await findRegularMemberByEmail(User, normalizedEmail);
+      if (memberExists) {
+        return res.status(200).json({
           exists: true,
-          message: 'Email address already registered'
+          message: 'Email address already registered for a member account',
         });
       }
 
@@ -348,11 +341,7 @@ router.post(
       const { username, password } = req.body;
       const loginId = String(username).toLowerCase().trim();
 
-      const user = await User.findOne({
-        where: {
-          email: { [Op.iLike]: loginId },
-        },
-      });
+      const user = await findCrmStaffByEmail(User, loginId);
       if (!user) {
         return res.status(401).json({ message: 'Invalid username or password' });
       }
@@ -361,11 +350,6 @@ router.post(
       const isMatch = await user.matchPassword(password);
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid username or password' });
-      }
-
-      const allowedRoles = ['admin', 'superadmin', 'moderator', 'viewer', 'crm_streamer'];
-      if (!allowedRoles.includes(user.userType)) {
-        return res.status(403).json({ message: 'Admin access required' });
       }
 
       user.lastLogin = new Date();
@@ -400,10 +384,8 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      const normalizedEmail = req.body.email.toLowerCase().trim();
-      const user = await User.findOne({
-        where: { email: { [Op.iLike]: normalizedEmail } },
-      });
+      const normalizedEmail = normalizeEmail(req.body.email);
+      const user = await findRegularMemberByEmail(User, normalizedEmail);
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
@@ -411,11 +393,6 @@ router.post(
       const isMatch = await user.matchPassword(req.body.password);
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
-      }
-      if (user.userType !== 'regular') {
-        return res.status(403).json({
-          message: 'Use the correct login: streamers use /api/auth/streamer-login, admins use /api/auth/admin-login',
-        });
       }
       user.lastLogin = new Date();
       await user.save();
@@ -467,20 +444,12 @@ router.post(
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
-      // Check for user (case-insensitive email search)
-      const user = await User.findOne({ 
-        where: { 
-          email: {
-            [Op.iLike]: normalizedEmail // Case-insensitive search (PostgreSQL)
-          }
-        } 
-      });
+      const user = await findRegularMemberByEmail(User, normalizedEmail);
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
       await ensureVerificationStateForUser(user);
 
-      // Check password
       const isMatch = await user.matchPassword(password);
       if (!isMatch) {
         return res.status(401).json({ message: 'Invalid credentials' });
@@ -528,7 +497,7 @@ router.post(
 // @access  Public
 router.post('/password-reset', [body('email').isEmail()], async (req, res) => {
   try {
-    const user = await User.findOne({ where: { email: req.body.email } });
+    const user = await findRegularMemberByEmail(User, req.body.email);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -731,10 +700,14 @@ router.post(
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
       const linkDelivery = req.body.linkDelivery === 'ios-native' ? 'ios-native' : 'web';
 
-      let user = await User.findOne({
-        where: { email: { [Op.iLike]: normalizedEmail } },
-        include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }],
-      });
+      let user = await findRegularMemberByEmail(User, normalizedEmail);
+      if (user) {
+        const profile = await Profile.findOne({
+          where: { userId: user.id },
+          attributes: ['firstName'],
+        });
+        user.profile = profile;
+      }
 
       if (!user) {
         if (!(await assertAllowRegistrations(res))) return;
@@ -837,6 +810,14 @@ router.post(
         return res.status(400).json({ message: 'Invalid login link. Request a new one.' });
       }
       await ensureVerificationStateForUser(user);
+
+      if (user.userType !== 'regular') {
+        return res.status(403).json({
+          message: isCrmSystemUser(user.userType)
+            ? frontendLoginForbiddenMessage
+            : 'Use the correct login for your account type.',
+        });
+      }
 
       // Do not clear loginLinkToken: same link can be used multiple times. It is invalidated only when a new link is requested (send-login-link or Google).
       user.lastLogin = new Date();
@@ -943,11 +924,9 @@ router.post(
         (emailFromToken ? emailFromToken.split('@')[0] : '') ||
         'Member';
 
-      let user = await User.findOne({ where: { appleSub: sub } });
+      let user = await User.findOne({ where: { appleSub: sub, userType: 'regular' } });
       if (!user && emailFromToken) {
-        user = await User.findOne({
-          where: { email: { [Op.iLike]: emailFromToken } },
-        });
+        user = await findRegularMemberByEmail(User, emailFromToken);
       }
 
       if (!user) {
@@ -982,6 +961,14 @@ router.post(
       }
 
       await ensureVerificationStateForUser(user);
+
+      if (user.userType !== 'regular') {
+        return res.status(403).json({
+          message: isCrmSystemUser(user.userType)
+            ? frontendLoginForbiddenMessage
+            : 'Use the correct login for your account type.',
+        });
+      }
 
       user.lastLogin = new Date();
       await user.save();
@@ -1124,10 +1111,14 @@ router.get('/google/callback', async (req, res) => {
       return errorRedirect('Google account has no email');
     }
 
-    let user = await User.findOne({
-      where: { email: { [Op.iLike]: email } },
-      include: [{ model: Profile, as: 'profile', attributes: ['firstName'], required: false }],
-    });
+    let user = await findRegularMemberByEmail(User, email);
+    if (user) {
+      const profile = await Profile.findOne({
+        where: { userId: user.id },
+        attributes: ['firstName'],
+      });
+      user.profile = profile;
+    }
 
     if (!user) {
       const randomPassword = crypto.randomBytes(12).toString('hex');

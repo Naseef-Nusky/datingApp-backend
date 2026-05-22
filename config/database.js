@@ -51,7 +51,18 @@ const connectDB = async () => {
   try {
     await sequelize.authenticate();
     console.log('✅ PostgreSQL Connected successfully');
-    
+
+    const migrationPath = path.join(__dirname, '..', 'migrations', 'allow-same-email-per-user-type.sql');
+    if (fs.existsSync(migrationPath)) {
+      try {
+        const sql = fs.readFileSync(migrationPath, 'utf8');
+        await sequelize.query(sql);
+        console.log('✅ Email-per-role uniqueness migration applied');
+      } catch (migrationErr) {
+        console.warn('⚠️ Email-per-role migration:', migrationErr.message);
+      }
+    }
+
     // Always sync models in development (creates tables if they don't exist)
     // Models must be imported before calling this
     const shouldSync = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV || process.env.SYNC_DB === 'true';
