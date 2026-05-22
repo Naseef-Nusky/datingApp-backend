@@ -49,6 +49,80 @@ const getChatMessageCost = async () => {
   }
 };
 
+/** Create or refresh a pending chat request (email, mingle, manual invite). */
+async function upsertPendingChatRequest({
+  senderId,
+  receiverId,
+  firstMessage,
+  sourceType = 'chat',
+  relatedMessageId = null,
+  io = null,
+}) {
+  const preview = String(firstMessage || '').trim().slice(0, 500);
+  if (!preview) return null;
+
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  let request = await ChatRequest.findOne({
+    where: { senderId, receiverId, status: 'pending' },
+  });
+
+  const updatePayload = {
+    firstMessage: preview,
+    expiresAt,
+    sourceType,
+    relatedMessageId: relatedMessageId || null,
+  };
+
+  if (request) {
+    await request.update(updatePayload);
+  } else {
+    request = await ChatRequest.create({
+      senderId,
+      receiverId,
+      firstMessage: preview,
+      status: 'pending',
+      expiresAt,
+      sourceType,
+      relatedMessageId: relatedMessageId || null,
+    });
+  }
+
+  try {
+    await Notification.create({
+      userId: receiverId,
+      type: 'chat_request',
+      title: sourceType === 'email' ? 'New Email' : 'New Chat Request',
+      message:
+        sourceType === 'email'
+          ? 'You have a new email'
+          : 'You have a new chat request',
+      relatedId: request.id,
+      relatedType: sourceType === 'email' ? 'email' : 'chat_request',
+    });
+  } catch (notifError) {
+    console.error('Error creating chat request notification:', notifError);
+  }
+
+  if (io) {
+    try {
+      const receiverIdStr = String(receiverId);
+      io.to(`user-${receiverIdStr}`).emit('new-chat-request', {
+        requestId: request.id,
+        senderId,
+        receiverId,
+        firstMessage: preview,
+        sourceType,
+        relatedMessageId: relatedMessageId || null,
+        createdAt: request.createdAt,
+      });
+    } catch (socketError) {
+      console.error('Error emitting new-chat-request:', socketError);
+    }
+  }
+
+  return request;
+}
+
 // Block sharing direct contact details in chat-like messages.
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PHONE_LIKE_RE = /(?:\+?\d[\d\s().-]{6,}\d)/g;
@@ -1215,6 +1289,8 @@ router.put('/chat-requests/:requestId/accept', protect, async (req, res) => {
       return res.status(403).json({ message: 'Cannot accept requests from demo accounts.' });
     }
 
+    const isEmailRequest = chatRequest.sourceType === 'email';
+
     // Check if chat already exists
     let chat = await Chat.findOne({
       where: {
@@ -1240,30 +1316,42 @@ router.put('/chat-requests/:requestId/accept', protect, async (req, res) => {
       status: 'accepted',
     });
 
-    // Create initial message from the first message
-    try {
-      await Message.create({
-        sender: chatRequest.senderId,
-        receiver: chatRequest.receiverId,
-        content: chatRequest.firstMessage,
-        messageType: 'text',
-        chatId: chat.id,
-        isRead: false,
-      });
-    } catch (msgError) {
-      console.error('Error creating initial message:', msgError);
-      // Non-critical, continue
+    // Email requests already have a Message row — do not duplicate on accept
+    if (!isEmailRequest) {
+      try {
+        await Message.create({
+          sender: chatRequest.senderId,
+          receiver: chatRequest.receiverId,
+          content: chatRequest.firstMessage,
+          messageType: 'text',
+          chatId: chat.id,
+          isRead: false,
+        });
+      } catch (msgError) {
+        console.error('Error creating initial message:', msgError);
+      }
+    } else if (chatRequest.relatedMessageId) {
+      try {
+        await Message.update(
+          { isRead: true },
+          { where: { id: chatRequest.relatedMessageId, receiver: req.user.id } }
+        );
+      } catch (readErr) {
+        console.error('Error marking email read on accept:', readErr);
+      }
     }
 
     // Create notification for sender
     try {
       await Notification.create({
         userId: chatRequest.senderId,
-        type: 'chat_request_accepted',
-        title: 'Chat Request Accepted',
-        message: `Your chat request has been accepted`,
-        relatedId: chat.id,
-        relatedType: 'chat',
+        type: isEmailRequest ? 'email_read' : 'chat_request_accepted',
+        title: isEmailRequest ? 'Email opened' : 'Chat Request Accepted',
+        message: isEmailRequest
+          ? 'Your email was opened'
+          : 'Your chat request has been accepted',
+        relatedId: isEmailRequest ? chatRequest.relatedMessageId || chat.id : chat.id,
+        relatedType: isEmailRequest ? 'email' : 'chat',
       });
     } catch (notifError) {
       console.error('Error creating notification:', notifError);
@@ -1303,9 +1391,12 @@ router.put('/chat-requests/:requestId/accept', protect, async (req, res) => {
     }
 
     res.json({
-      message: 'Chat request accepted',
+      message: isEmailRequest ? 'Email request accepted' : 'Chat request accepted',
       chatId: chat.id,
       chat: chat,
+      sourceType: chatRequest.sourceType || 'chat',
+      emailMessageId: isEmailRequest ? chatRequest.relatedMessageId : null,
+      senderId: chatRequest.senderId,
     });
   } catch (error) {
     console.error('Accept chat request error:', error);
@@ -2149,6 +2240,23 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
     try {
       message = await Message.create(messageData);
       console.log('✅ [SEND EMAIL] Message created with chat_id:', message.id, 'chat:', chat.id);
+
+      const emailPreview =
+        (subject && String(subject).trim()) ||
+        (content && String(content).trim().slice(0, 200)) ||
+        'New email';
+      try {
+        await upsertPendingChatRequest({
+          senderId: req.user.id,
+          receiverId,
+          firstMessage: emailPreview,
+          sourceType: 'email',
+          relatedMessageId: message.id,
+          io: req.io,
+        });
+      } catch (crError) {
+        console.error('Error upserting email chat request:', crError);
+      }
 
       if (creditsUsed > 0) {
         try {

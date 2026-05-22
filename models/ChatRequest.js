@@ -42,6 +42,17 @@ const ChatRequest = sequelize.define(
       allowNull: true,
       field: 'expires_at',
     },
+    sourceType: {
+      type: DataTypes.STRING(20),
+      defaultValue: 'chat',
+      allowNull: false,
+      field: 'source_type',
+    },
+    relatedMessageId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'related_message_id',
+    },
   },
   {
     tableName: 'chat_requests',
