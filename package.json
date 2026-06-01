@@ -12,6 +12,8 @@
     "create-review-user": "node scripts/createAppReviewUser.js",
     "backfill-zodiac": "node scripts/backfillZodiac.js",
     "randomize-usa-cities": "node scripts/randomizeUsaCities.js",
+    "update-dummy-locations": "node scripts/updateDummyProfileLocations.js",
+    "update-dummy-locations-dry": "node scripts/updateDummyProfileLocations.js --dry-run",
     "create-admin": "node scripts/createAdmin.js",
     "update-superadmin": "node scripts/updateToSuperAdmin.js",
     "import-dummy-profiles": "node scripts/importDummyProfilesFromCsv.js",

@@ -6,6 +6,10 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { streamer, admin } from '../middleware/auth.js';
 import { detectLocation } from '../utils/locationDetector.js';
+import {
+  buildLocationSearchConditions,
+  buildCityCountrySearchConditions,
+} from '../utils/locationSearch.js';
 import { sendProfileViewsBatchEmail } from '../utils/emailService.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
@@ -146,49 +150,28 @@ router.get('/', protect, async (req, res) => {
     }
 
     // Location filters.
-    // - `location` (single input): match city OR country.
-    // - `city` + `country` (explicit fields): both are combined with AND.
+    // - `location` (single input): match city, country, state, or US state city lists (CA / FL).
+    // - `city` + `country`: AND unless city is a US state name (e.g. California, USA).
     if (location || city || country) {
-      const normalizeLocationTerm = (value) =>
-        String(value || '')
-          .trim()
-          .replace(/\s+/g, ' ')
-          .replace(/'/g, "''")
-          .toLowerCase();
-
       const locationConditions = [];
+
       if (location && String(location).trim()) {
-        const normalizedLocation = normalizeLocationTerm(location);
-        locationConditions.push({
-          [Op.or]: [
-            sequelize.literal(
-              `regexp_replace(lower(coalesce("location"->>'city', '')), '\\s+', ' ', 'g') LIKE '%${normalizedLocation}%'`
-            ),
-            sequelize.literal(
-              `regexp_replace(lower(coalesce("location"->>'country', '')), '\\s+', ' ', 'g') LIKE '%${normalizedLocation}%'`
-            ),
-          ],
-        });
+        locationConditions.push(
+          ...buildLocationSearchConditions(sequelize, location)
+        );
+      } else {
+        if (city && String(city).trim()) {
+          locationConditions.push(
+            ...buildCityCountrySearchConditions(sequelize, city, country || '')
+          );
+        } else if (country && String(country).trim()) {
+          locationConditions.push(
+            ...buildLocationSearchConditions(sequelize, country)
+          );
+        }
       }
 
-      if (city && String(city).trim()) {
-        const normalizedCity = normalizeLocationTerm(city);
-        locationConditions.push(
-          sequelize.literal(
-            `regexp_replace(lower(coalesce("location"->>'city', '')), '\\s+', ' ', 'g') LIKE '%${normalizedCity}%'`
-          )
-        );
-      }
-      if (country && String(country).trim()) {
-        const normalizedCountry = normalizeLocationTerm(country);
-        locationConditions.push(
-          sequelize.literal(
-            `regexp_replace(lower(coalesce("location"->>'country', '')), '\\s+', ' ', 'g') LIKE '%${normalizedCountry}%'`
-          )
-        );
-      }
       if (locationConditions.length > 0) {
-        // Use AND so all provided location constraints are respected.
         if (where[Op.and]) {
           where[Op.and].push(...locationConditions);
         } else {
