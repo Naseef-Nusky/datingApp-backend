@@ -18,6 +18,7 @@ import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import {
   findCrmStaffByEmail,
+  findAppDatingUserByEmail,
   findRegularMemberByEmail,
   isCrmSystemUser,
   normalizeEmail,
@@ -444,7 +445,8 @@ router.post(
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
-      const user = await findRegularMemberByEmail(User, normalizedEmail);
+      // Allow all dating-app users (regular + streamer + talent). CRM staff must use /admin-login.
+      const user = await findAppDatingUserByEmail(User, normalizedEmail);
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
