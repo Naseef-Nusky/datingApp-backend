@@ -17,6 +17,7 @@ import Chat from './models/Chat.js';
 import CreditTransaction from './models/CreditTransaction.js';
 import { Op } from 'sequelize';
 import { getCreditSettings } from './utils/creditSettings.js';
+import { checkCanStartCall } from './utils/callAccess.js';
 import { sendOnlineNotification } from './utils/sendgridService.js';
 import { updateUserSpendAndVip } from './utils/vip.js';
 import {
@@ -347,6 +348,18 @@ io.on('connection', (socket) => {
     const restriction = await checkFreeToFreeRestriction(callerId, receiverId);
     if (!restriction.allowed) {
       socket.emit('call-request-error', { message: restriction.message });
+      return;
+    }
+
+    const callAccess = await checkCanStartCall(callerId, data.callType);
+    if (!callAccess.allowed) {
+      socket.emit('call-request-error', {
+        message: callAccess.message,
+        code: callAccess.code,
+        required: callAccess.required,
+        balance: callAccess.balance,
+        costPerMinute: callAccess.costPerMinute,
+      });
       return;
     }
     

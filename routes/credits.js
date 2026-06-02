@@ -5,6 +5,7 @@ import CreditTransaction from '../models/CreditTransaction.js';
 import SystemSetting from '../models/SystemSetting.js';
 import { protect } from '../middleware/auth.js';
 import { getCreditSettings, DEFAULT_REFILL_PACKS } from '../utils/creditSettings.js';
+import { checkCanStartCall } from '../utils/callAccess.js';
 
 const STRIPE_PRICES_KEY = 'stripe.credit_pack_prices';
 const STRIPE_SUBSCRIPTION_PRICES_KEY = 'stripe.subscription_prices'; // recurring monthly
@@ -153,6 +154,20 @@ router.get('/subscription-modal', async (req, res) => {
     res.json(modal);
   } catch (error) {
     console.error('Get subscription modal error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/credits/call-access
+// @desc    Check if user can start a video/voice call (subscription + credits)
+// @access  Private
+router.get('/call-access', protect, async (req, res) => {
+  try {
+    const callType = req.query.callType === 'voice' ? 'voice' : 'video';
+    const result = await checkCanStartCall(req.user.id, callType);
+    res.json(result);
+  } catch (error) {
+    console.error('Call access check error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
