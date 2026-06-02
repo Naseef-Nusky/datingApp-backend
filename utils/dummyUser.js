@@ -7,7 +7,11 @@ import { Op } from 'sequelize';
 export function isDummyUserEmail(email) {
   if (typeof email !== 'string') return false;
   const e = email.trim().toLowerCase();
-  return e.startsWith('dummy') && e.endsWith('@example.com');
+  if (e.startsWith('dummy') && e.endsWith('@example.com')) return true;
+  // Test/seed streamer accounts (e.g. dummy.briar@dating.com, dummy.zara@streamer.com)
+  if (e.startsWith('dummy')) return true;
+  if (e.endsWith('@streamer.com')) return true;
+  return false;
 }
 
 /**

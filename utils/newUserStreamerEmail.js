@@ -52,12 +52,56 @@ const getPrimaryPhotoUrl = (profile) => {
   return null;
 };
 
-/** Real streamers only (userType streamer, not talent/dummy seeds). Prefer online. */
-const pickRandomStreamerForWelcomeEmail = async () => {
+const normalizeGender = (value) => {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'man' || v === 'm') return 'male';
+  if (v === 'woman' || v === 'f') return 'female';
+  if (v === 'male' || v === 'female' || v === 'other') return v;
+  return null;
+};
+
+/** Genders of streamers to feature — matches member preferences.lookingFor, else opposite of member gender. */
+const targetStreamerGendersForMember = (memberProfile) => {
+  const lookingFor = memberProfile?.preferences?.lookingFor;
+  if (lookingFor != null && String(lookingFor).trim() !== '') {
+    const lf = normalizeGender(lookingFor);
+    if (lf === 'male' || lf === 'female') return [lf];
+    if (lf === 'both' || lf === 'all') return ['male', 'female'];
+  }
+  const memberGender = normalizeGender(memberProfile?.gender);
+  if (memberGender === 'male') return ['female'];
+  if (memberGender === 'female') return ['male'];
+  return ['male', 'female'];
+};
+
+const shuffle = (arr) => {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+};
+
+const toStreamerPayload = (streamer, frontendUrl) => ({
+  id: streamer.id,
+  firstName: streamer.profile?.firstName || streamer.email?.split('@')[0] || 'Someone',
+  age: streamer.profile?.age ?? null,
+  location: streamer.profile?.location || null,
+  photoUrl: getPrimaryPhotoUrl(streamer.profile),
+  chatUrl: `${frontendUrl}/profile/${streamer.id}`,
+  isOnline: Boolean(streamer.profile?.isOnline),
+});
+
+/** All active streamers/talent matching the new member's seeking preference (online listed first). */
+export const pickStreamersForWelcomeEmail = async (memberProfile) => {
+  const targetGenders = targetStreamerGendersForMember(memberProfile);
+
   const streamers = await User.findAll({
     where: {
-      userType: 'streamer',
+      userType: { [Op.in]: ['streamer', 'talent'] },
       isActive: true,
+      isAdminCreated: true,
       ...excludeDummyUsersEmailWhere(),
     },
     include: [
@@ -65,23 +109,44 @@ const pickRandomStreamerForWelcomeEmail = async () => {
         model: Profile,
         as: 'profile',
         required: true,
-        attributes: ['firstName', 'lastName', 'photos', 'isOnline'],
+        attributes: ['firstName', 'lastName', 'photos', 'isOnline', 'gender', 'age', 'location'],
       },
     ],
     attributes: ['id', 'email', 'userType'],
   });
 
-  const eligible = streamers.filter((s) => s.email && !isDummyUserEmail(s.email));
-  if (!eligible.length) return null;
+  const eligible = streamers.filter((s) => {
+    if (!s.email || isDummyUserEmail(s.email)) return false;
+    const sg = normalizeGender(s.profile?.gender);
+    if (!sg) return false;
+    return targetGenders.includes(sg);
+  });
 
-  const online = eligible.filter((s) => s.profile?.isOnline);
-  const pool = online.length > 0 ? online : eligible;
-  if (online.length === 0) {
+  if (!eligible.length) {
     console.warn(
-      '[newUserStreamerEmail] No online streamer; using random active streamer for welcome email'
+      `[newUserStreamerEmail] No streamers for target genders [${targetGenders.join(', ')}]`
+    );
+    return [];
+  }
+
+  const byName = (a, b) =>
+    String(a.profile?.firstName || '').localeCompare(String(b.profile?.firstName || ''), undefined, {
+      sensitivity: 'base',
+    });
+
+  const online = eligible.filter((s) => s.profile?.isOnline).sort(byName);
+  const offline = eligible.filter((s) => !s.profile?.isOnline).sort(byName);
+  const ordered = [...online, ...offline];
+  if (!online.length) {
+    console.warn(
+      '[newUserStreamerEmail] No online streamer matching preference; including offline streamers'
     );
   }
-  return pool[Math.floor(Math.random() * pool.length)];
+
+  console.log(
+    `[newUserStreamerEmail] Including all ${ordered.length} matching streamer(s) in welcome email`
+  );
+  return ordered;
 };
 
 /**
@@ -147,33 +212,30 @@ export const processDueNewUserStreamerEmails = async () => {
         continue;
       }
 
-      const streamer = await pickRandomStreamerForWelcomeEmail();
-      if (!streamer) {
+      const memberProfile = newUser.profile || {};
+      const streamers = await pickStreamersForWelcomeEmail(memberProfile);
+      if (!streamers.length) {
         row.sendAt = new Date(Date.now() + RETRY_WHEN_OFFLINE_MINUTES * 60 * 1000);
         row.error = 'no_streamer_available_retry';
         await row.save();
         console.warn(
-          `[newUserStreamerEmail] No active streamer for user ${row.newUserId}; retry at ${row.sendAt.toISOString()}`
+          `[newUserStreamerEmail] No matching streamer for user ${row.newUserId}; retry at ${row.sendAt.toISOString()}`
         );
         continue;
       }
 
-      row.streamerUserId = streamer.id;
+      row.streamerUserId = streamers[0].id;
 
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-      const recipientName = newUser.profile?.firstName || newUser.email.split('@')[0] || 'there';
-      const streamerPayload = {
-        id: streamer.id,
-        firstName: streamer.profile?.firstName || streamer.email?.split('@')[0] || 'Someone',
-        photoUrl: getPrimaryPhotoUrl(streamer.profile),
-      };
-      const chatUrl = `${frontendUrl}/profile/${streamer.id}`;
+      const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
+      const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
+      const browseUrl = `${frontendUrl}/members`;
 
       const result = await sendStreamerReadyToChatEmail(
         newUser.email,
         recipientName,
-        streamerPayload,
-        chatUrl
+        streamerPayloads,
+        browseUrl
       );
 
       if (!result?.success) {
@@ -202,6 +264,41 @@ export const processDueNewUserStreamerEmails = async () => {
     console.log(`[newUserStreamerEmail] Processed due: sent=${sent}, failed=${failed}`);
   }
   return { processed: due.length, sent, failed };
+};
+
+/** Send welcome email immediately (admin/test). Returns { sent, count, streamerNames }. */
+export const sendNewUserStreamerWelcomeEmailNow = async (userId) => {
+  const newUser = await User.findByPk(userId, {
+    include: [{ model: Profile, as: 'profile', required: false }],
+  });
+  if (!newUser?.email || newUser.userType !== 'regular') {
+    return { sent: false, reason: 'not_regular_or_no_email' };
+  }
+
+  const memberProfile = newUser.profile || {};
+  const streamers = await pickStreamersForWelcomeEmail(memberProfile);
+  if (!streamers.length) {
+    return { sent: false, reason: 'no_matching_streamers', count: 0 };
+  }
+
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
+  const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
+  const browseUrl = `${frontendUrl}/members`;
+
+  const result = await sendStreamerReadyToChatEmail(
+    newUser.email,
+    recipientName,
+    streamerPayloads,
+    browseUrl
+  );
+
+  return {
+    sent: Boolean(result?.success),
+    count: streamers.length,
+    streamerNames: streamers.map((s) => s.profile?.firstName).filter(Boolean),
+    error: result?.error,
+  };
 };
 
 export const startNewUserStreamerEmailScheduler = () => {

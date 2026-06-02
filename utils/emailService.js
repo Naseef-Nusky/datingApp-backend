@@ -529,9 +529,65 @@ export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineU
   );
 };
 
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const formatStreamerMeta = (streamer) => {
+  const parts = [];
+  if (streamer?.age) parts.push(`${streamer.age}`);
+  if (streamer?.location) parts.push(escapeHtml(streamer.location));
+  return parts.length ? parts.join(' · ') : '';
+};
+
+const renderStreamerCard = (streamer, frontendUrl, compact = false) => {
+  const name = escapeHtml(streamer?.firstName || 'Someone');
+  const photoUrl = escapeHtml(streamer?.photoUrl || `${frontendUrl}/profile.png`);
+  const profileUrl = escapeHtml(streamer?.chatUrl || frontendUrl);
+  const meta = formatStreamerMeta(streamer);
+  const onlineBadge = streamer?.isOnline
+    ? '<span style="color:#2e7d32;font-size:13px;font-weight:600;">Online now</span>'
+    : '';
+
+  if (compact) {
+    return `
+      <div class="card card-compact">
+        <div class="card-row">
+          <img src="${photoUrl}" alt="${name}" class="profile-photo profile-photo-sm" width="72" height="72" />
+          <div class="card-row-body">
+            <p class="streamer-name">${name}</p>
+            ${meta ? `<p class="streamer-meta">${meta}</p>` : ''}
+            ${onlineBadge}
+            <p style="margin:8px 0 0;"><a class="cta-link" href="${profileUrl}">Chat with ${name}</a></p>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  return `
+      <div class="card">
+        <div class="photo-wrap">
+          <img src="${photoUrl}" alt="${name}" class="profile-photo" width="100" height="100" />
+        </div>
+        <div class="card-body">
+          <p class="streamer-name">${name}</p>
+          ${meta ? `<p class="streamer-meta">${meta}</p>` : ''}
+          ${onlineBadge}
+          <p style="margin:8px 0 0;color:#444;">${name} would love to chat with you.</p>
+          <div class="cta-wrap">
+            <a class="cta" href="${profileUrl}">Chat with ${name}</a>
+          </div>
+        </div>
+      </div>`;
+};
+
 /**
- * Delayed welcome-style email to a new member (streamer featured in body).
+ * Delayed welcome-style email to a new member (one or more streamers in body).
  * Sent from the platform as "Vantage Dating Team" — not the streamer's name in From.
+ * @param {object|object[]} streamer - Single streamer payload or array (gender-matched intro).
  */
 export const sendStreamerReadyToChatEmail = async (
   to,
@@ -545,11 +601,22 @@ export const sendStreamerReadyToChatEmail = async (
     process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating Team';
   const logoUrl = EMAIL_LOGO_URL;
   const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-  const streamerName = streamer?.firstName || 'Someone';
-  const safeRecipient = recipientName || 'there';
-  const photoUrl = streamer?.photoUrl || `${frontendUrl}/profile.png`;
+  const safeRecipient = escapeHtml(recipientName || 'there');
   const fromName = teamFromName;
-  const subject = `${streamerName} is ready to chat with you`;
+
+  const streamers = (Array.isArray(streamer) ? streamer : [streamer]).filter(Boolean);
+  const browseUrl = escapeHtml(chatUrl || `${frontendUrl}/members`);
+  const count = streamers.length;
+  const countLabel = count === 1 ? '1 member' : `${count} members`;
+
+  const subject =
+    count === 1
+      ? '1 member is ready to chat with you'
+      : `${count} members are ready to chat with you`;
+
+  const introHtml = `<p style="text-align:center;">All <strong>${countLabel}</strong> below match what you are looking for and are ready to hear from you.</p>`;
+
+  const cardsHtml = streamers.map((s) => renderStreamerCard(s, frontendUrl, true)).join('');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -564,17 +631,25 @@ export const sendStreamerReadyToChatEmail = async (
     .content { padding: 24px; }
     h1 { margin: 0 0 16px; font-size: 24px; color: #1a1a1a; text-align: center; }
     p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; }
-    .card { border: 1px solid #e8e8e8; border-radius: 12px; margin: 20px 0; background: #fafafa; }
+    .card { border: 1px solid #e8e8e8; border-radius: 12px; margin: 16px 0; background: #fafafa; }
+    .card-compact { padding: 14px 16px; }
+    .card-row { display: table; width: 100%; }
+    .card-row-body { display: table-cell; vertical-align: middle; padding-left: 14px; text-align: left; }
     .photo-wrap { text-align: center; padding: 20px 20px 8px; }
     .profile-photo {
       width: 100px; height: 100px; max-width: 100px; max-height: 100px;
       border-radius: 12px; object-fit: cover; display: inline-block;
       border: 3px solid #B5458F;
     }
+    .profile-photo-sm {
+      width: 72px; height: 72px; max-width: 72px; max-height: 72px;
+      display: table-cell; vertical-align: middle;
+    }
     .card-body { padding: 8px 20px 24px; text-align: center; }
-    .streamer-name { font-size: 20px; font-weight: 700; color: #5A2D8A; margin: 0 0 8px; }
+    .streamer-name { font-size: 18px; font-weight: 700; color: #5A2D8A; margin: 0 0 4px; }
+    .streamer-meta { font-size: 14px; color: #666; margin: 0 0 4px; }
     .cta-wrap { text-align: center; margin-top: 16px; }
-    .cta {
+    .cta, .cta-main {
       display: inline-block;
       background-color: #B5458F;
       background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672);
@@ -585,6 +660,8 @@ export const sendStreamerReadyToChatEmail = async (
       padding: 14px 32px;
       border-radius: 8px;
     }
+    .cta-link { color: #B5458F; font-weight: 700; text-decoration: none; font-size: 15px; }
+    .browse-wrap { text-align: center; margin-top: 24px; }
     .footer {
       padding: 20px 24px 28px;
       text-align: center;
@@ -600,19 +677,11 @@ export const sendStreamerReadyToChatEmail = async (
       <img src="${logoUrl}" alt="${appName}" class="logo" />
     </div>
     <div class="content">
-      <h1>Hi ${safeRecipient}, someone special is waiting for you</h1>
-      <p style="text-align:center;"><strong>${streamerName}</strong> is <strong>online now</strong> and <strong>ready to take your messages</strong> — say hello while they are available.</p>
-      <div class="card">
-        <div class="photo-wrap">
-          <img src="${photoUrl}" alt="${streamerName}" class="profile-photo" width="100" height="100" />
-        </div>
-        <div class="card-body">
-          <p class="streamer-name">${streamerName}</p>
-          <p style="margin:0;color:#444;">I'm online now and would love to chat with you.</p>
-          <div class="cta-wrap">
-            <a class="cta" href="${chatUrl}" style="background-color:#B5458F;color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;padding:14px 32px;border-radius:8px;display:inline-block;">Chat with ${streamerName}</a>
-          </div>
-        </div>
+      <h1>Hi ${safeRecipient}, ${count === 1 ? 'a member is waiting to meet you' : 'members are waiting to meet you'}</h1>
+      ${introHtml}
+      ${cardsHtml}
+      <div class="browse-wrap">
+        <a class="cta-main" href="${browseUrl}">See all members on ${escapeHtml(appName)}</a>
       </div>
     </div>
     <div class="footer">${teamFromName}</div>
@@ -621,7 +690,16 @@ export const sendStreamerReadyToChatEmail = async (
 </html>
   `;
 
-  const textContent = `Hi ${safeRecipient}, ${streamerName} is ready to chat with you on ${appName}. Open: ${chatUrl}`;
+  const textLines = streamers.map((s) => {
+    const meta = [s.age, s.location].filter(Boolean).join(', ');
+    return `- ${s.firstName || 'Someone'}${meta ? ` (${meta})` : ''}: ${s.chatUrl || browseUrl}`;
+  });
+  const textContent = [
+    `Hi ${recipientName || 'there'},`,
+    `${count} member(s) who match your preferences are ready to chat on ${appName}:`,
+    ...textLines,
+    `Browse: ${chatUrl || `${frontendUrl}/members`}`,
+  ].join('\n');
 
   const mailOpts = { fromName };
   const platformReply =
