@@ -87,7 +87,6 @@ const toStreamerPayload = (streamer, frontendUrl) => ({
   id: streamer.id,
   firstName: streamer.profile?.firstName || streamer.email?.split('@')[0] || 'Someone',
   age: streamer.profile?.age ?? null,
-  location: streamer.profile?.location || null,
   photoUrl: getPrimaryPhotoUrl(streamer.profile),
   chatUrl: `${frontendUrl}/profile/${streamer.id}`,
   isOnline: Boolean(streamer.profile?.isOnline),
@@ -229,13 +228,13 @@ export const processDueNewUserStreamerEmails = async () => {
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
       const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
       const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
-      const browseUrl = `${frontendUrl}/members`;
+      const dashboardUrl = `${frontendUrl}/dashboard`;
 
       const result = await sendStreamerReadyToChatEmail(
         newUser.email,
         recipientName,
         streamerPayloads,
-        browseUrl
+        dashboardUrl
       );
 
       if (!result?.success) {
@@ -284,13 +283,13 @@ export const sendNewUserStreamerWelcomeEmailNow = async (userId) => {
   const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
   const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
   const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
-  const browseUrl = `${frontendUrl}/members`;
+  const dashboardUrl = `${frontendUrl}/dashboard`;
 
   const result = await sendStreamerReadyToChatEmail(
     newUser.email,
     recipientName,
     streamerPayloads,
-    browseUrl
+    dashboardUrl
   );
 
   return {
