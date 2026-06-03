@@ -16,7 +16,7 @@ import jwt from 'jsonwebtoken';
 import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
-import { getFrontendUrl } from '../utils/frontendUrl.js';
+import { getFrontendUrl, getEmailFrontendUrl } from '../utils/frontendUrl.js';
 import {
   findCrmStaffByEmail,
   findAppDatingUserByEmail,
@@ -700,8 +700,9 @@ router.post(
       }
 
       const normalizedEmail = req.body.email.toLowerCase().trim();
-      const frontendUrl = getFrontendUrl(req);
       const linkDelivery = req.body.linkDelivery === 'ios-native' ? 'ios-native' : 'web';
+      const frontendUrl =
+        linkDelivery === 'ios-native' ? getFrontendUrl(req) : getEmailFrontendUrl();
 
       let user = await findRegularMemberByEmail(User, normalizedEmail);
       if (user) {
@@ -1150,7 +1151,7 @@ router.get('/google/callback', async (req, res) => {
       { where: { id: user.id } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
 

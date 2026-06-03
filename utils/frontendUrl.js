@@ -53,4 +53,16 @@ export const getFrontendUrl = (req = null) => {
   return normalizeUrl(process.env.FRONTEND_URL || 'https://vantagedating.com');
 };
 
+/** Production site URL for links inside outbound email (never localhost). */
+export const getEmailFrontendUrl = () => {
+  if (process.env.EMAIL_FORCE_LOCAL_LINKS === 'true' || process.env.EMAIL_FORCE_LOCAL_LINKS === '1') {
+    return getFrontendUrl();
+  }
+  const explicit = normalizeUrl(process.env.EMAIL_FRONTEND_URL || '');
+  if (explicit && !isLocalHostUrl(explicit)) return explicit;
+  const production = normalizeUrl(process.env.FRONTEND_URL || '');
+  if (production && !isLocalHostUrl(production)) return production;
+  return getFrontendUrl();
+};
+
 export default getFrontendUrl;

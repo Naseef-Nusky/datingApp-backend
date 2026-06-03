@@ -592,13 +592,24 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       .replace(/&quot;/g, '"')
       .trim();
 
-    // List-Unsubscribe and Reply-To improve deliverability and reduce spam folder placement
-    const preferencesUrl = `${FRONTEND_URL}/settings/email-preferences`;
+    const isTransactional =
+      trackingData.notificationType === 'login_link' ||
+      trackingData.notificationType === 'password_reset';
+
+    const enableClickTracking =
+      !isTransactional &&
+      (process.env.SENDGRID_CLICK_TRACKING === 'true' ||
+        process.env.SENDGRID_CLICK_TRACKING === '1');
+
+    const preferencesUrl = `${FRONTEND_URL}/help`;
     const deliverabilityHeaders = {
       'X-Entity-Ref-ID': trackingData.messageId || trackingData.userId || 'email-notification',
-      'List-Unsubscribe': `<${preferencesUrl}>`,
-      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      'Precedence': 'auto',
+      ...(isTransactional
+        ? {}
+        : {
+            'List-Unsubscribe': `<${preferencesUrl}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          }),
       'X-Auto-Response-Suppress': 'OOF, AutoReply',
     };
 
@@ -621,15 +632,24 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       subject,
       html: htmlContent,
       text: plainText,
-      trackingSettings: {
-        clickTracking: { enable: true },
-        openTracking: { enable: true },
-      },
+      trackingSettings: enableClickTracking
+        ? {
+            clickTracking: { enable: true },
+            openTracking: { enable: true },
+          }
+        : {
+            clickTracking: { enable: false, enableText: false },
+            openTracking: { enable: false },
+            subscriptionTracking: { enable: false },
+          },
       customArgs: trackingData, // For webhook tracking
       headers: deliverabilityHeaders,
-      categories: ['notification', 'message', trackingData.notificationType || 'general'],
+      categories: isTransactional
+        ? ['transactional']
+        : ['notification', 'message', trackingData.notificationType || 'general'],
       mailSettings: {
         sandboxMode: { enable: false },
+        ...(isTransactional ? { bypassListManagement: { enable: true } } : {}),
       },
     };
 
@@ -637,6 +657,7 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
     console.log('📧 [SendGrid] ========== SENDING EMAIL NOW ==========');
     console.log('📧 [SendGrid] Timestamp:', new Date().toISOString());
     console.log('📧 [SendGrid] Sending email from:', FROM_EMAIL, 'to:', to);
+    console.log('📧 [SendGrid] Click tracking:', enableClickTracking ? 'ON' : 'OFF');
     console.log('📧 [SendGrid] Subject:', subject);
     console.log('📧 [SendGrid] FROM_NAME:', FROM_NAME);
     console.log('📧 [SendGrid] Has HTML content:', !!htmlContent);

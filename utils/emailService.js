@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { getFrontendUrl } from './frontendUrl.js';
+import { getEmailFrontendUrl } from './frontendUrl.js';
 
 // Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
 const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
@@ -33,7 +33,12 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, at
     // Prefer SendGrid in production (and when configured) – no SMTP needed
     if (process.env.SENDGRID_API_KEY) {
       const { sendEmail: sendGridSend } = await import('./sendgridService.js');
-      const result = await sendGridSend(to, subject, htmlContent, textContent, {}, mailOptions);
+      const trackingData =
+        mailOptions.trackingData && typeof mailOptions.trackingData === 'object'
+          ? mailOptions.trackingData
+          : {};
+      const { trackingData: _td, ...sgMailOptions } = mailOptions;
+      const result = await sendGridSend(to, subject, htmlContent, textContent, trackingData, sgMailOptions);
       if (result.success) {
         console.log('✅ Email sent via SendGrid:', result.messageId);
       }
@@ -157,8 +162,11 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
  * @param {string} userId - User ID for footer
  */
 export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') => {
-  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
-  const frontendUrl = getFrontendUrl();
+  const brandName =
+    (process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating')
+      .replace(/\s+Team$/i, '')
+      .trim() || 'Vantage Dating';
+  const frontendUrl = getEmailFrontendUrl();
   const logoUrl = EMAIL_LOGO_URL;
 
   const htmlContent = `
@@ -180,27 +188,32 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
 <body>
   <div class="container">
     <div class="header">
-      <img src="${logoUrl}" alt="${appName}" class="logo" />
+      <img src="${logoUrl}" alt="${brandName}" class="logo" />
     </div>
     <p style="font-size: 18px; font-weight: bold;">Hello, ${firstName}!</p>
-    <p>You have requested a login link to access your ${appName} account.</p>
-    <p>Please follow your <a href="${loginUrl}" class="login-link">link to log in</a>.</p>
+    <p>You requested a sign-in link for your ${brandName} account.</p>
+    <p>Please follow your <a href="${loginUrl}" class="login-link">link to sign in</a>.</p>
     <p style="text-align: center;">
-      <a href="${loginUrl}" class="button">Continue and Log in</a>
+      <a href="${loginUrl}" class="button">Sign in</a>
     </p>
     <p style="font-size: 12px; color: #666;">If you didn't request this, you can ignore this email.</p>
     <div class="footer">
-      <p>If you would like to hear about bonuses and special offers, please add this address to your contacts.</p>
-      <p>Your ID: ${userId || '—'}</p>
-      <p><a href="${frontendUrl}/terms">Terms</a> · <a href="${frontendUrl}/terms#privacy">Privacy Policy</a> · <a href="${frontendUrl}/terms#refund">Refund and Cancellation Policy</a></p>
-      <p><a href="${frontendUrl}/terms#unsubscribe">Unsubscribe here</a></p>
+      <p><a href="${frontendUrl}/help">Help</a> · <a href="${frontendUrl}/contact">Contact</a> · <a href="${frontendUrl}/privacy">Privacy</a></p>
     </div>
   </div>
 </body>
 </html>
   `;
 
-  return await sendEmail(to, `Log in to ${appName}`, htmlContent);
+  const textContent = [
+    `Hello, ${firstName || 'there'},`,
+    `Sign in to ${brandName}: ${loginUrl}`,
+    `If you did not request this, ignore this email.`,
+  ].join('\n');
+
+  return await sendEmail(to, `Your ${brandName} sign-in link`, htmlContent, textContent, [], {
+    trackingData: { notificationType: 'login_link', userId },
+  });
 };
 
 /**

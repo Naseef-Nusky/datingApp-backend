@@ -51,7 +51,7 @@ import {
 } from '../utils/siteSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
-import { getFrontendUrl } from '../utils/frontendUrl.js';
+import { getEmailFrontendUrl } from '../utils/frontendUrl.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
   formatDuration,
@@ -109,7 +109,6 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null)
       return { sent: false, error: 'Missing email' };
     }
 
-    const frontendUrl = getFrontendUrl(req);
     const rawToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
@@ -118,7 +117,7 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null)
       { where: { id: userId } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
 
