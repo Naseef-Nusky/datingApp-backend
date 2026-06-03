@@ -209,12 +209,14 @@ router.get('/', protect, async (req, res) => {
               [Op.and]: [
                 { userType: 'regular' },
                 { registrationComplete: true },
+                { isActive: true },
                 excludeDummyUsersEmailWhere(),
               ],
             }
           : {
               userType: { [Op.notIn]: adminRoles },
               registrationComplete: true,
+              isActive: true,
             },
         required: true,
       },
@@ -569,6 +571,11 @@ router.get('/:id', protect, async (req, res) => {
     const isStreamerOrTalent =
       req.user.userType === 'streamer' || req.user.userType === 'talent';
     if (isStreamerOrTalent && user && isDummyUserEmail(user.email)) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    const viewingOwnProfile = String(req.user.id) === String(profile.userId);
+    if (!viewingOwnProfile && user && user.isActive === false) {
       return res.status(404).json({ message: 'Profile not found' });
     }
 
