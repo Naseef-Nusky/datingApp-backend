@@ -17,7 +17,6 @@ import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import { getFrontendUrl } from '../utils/frontendUrl.js';
-import { normalizeEmailLinkUrl } from '../utils/emailTemplateHelpers.js';
 import {
   findCrmStaffByEmail,
   findAppDatingUserByEmail,
@@ -754,9 +753,7 @@ router.post(
         }
         loginUrl = `${scheme}://auth/login-callback?token=${encodeURIComponent(rawToken)}`;
       } else {
-        loginUrl = normalizeEmailLinkUrl(
-          `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
-        );
+        loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
       }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
@@ -1153,9 +1150,7 @@ router.get('/google/callback', async (req, res) => {
       { where: { id: user.id } }
     );
 
-    const loginUrl = normalizeEmailLinkUrl(
-      `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
-    );
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
 

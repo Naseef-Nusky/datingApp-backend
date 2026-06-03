@@ -52,7 +52,6 @@ import {
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import { getFrontendUrl } from '../utils/frontendUrl.js';
-import { normalizeEmailLinkUrl } from '../utils/emailTemplateHelpers.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
   formatDuration,
@@ -119,9 +118,7 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null)
       { where: { id: userId } }
     );
 
-    const loginUrl = normalizeEmailLinkUrl(
-      `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
-    );
+    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
 
