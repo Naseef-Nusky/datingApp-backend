@@ -545,26 +545,42 @@ const formatNameAgeLine = (streamer) => {
   return name;
 };
 
-const renderStreamerCard = (streamer, frontendUrl) => {
+const renderStreamerGridCell = (streamer, frontendUrl) => {
   const name = escapeHtml(streamer?.firstName || 'Someone');
   const nameAgeLine = formatNameAgeLine(streamer);
   const photoUrl = escapeHtml(streamer?.photoUrl || `${frontendUrl}/profile.png`);
   const profileUrl = escapeHtml(streamer?.chatUrl || frontendUrl);
-  const onlineBadge = streamer?.isOnline
-    ? '<span style="color:#2e7d32;font-size:13px;font-weight:600;">Online now</span>'
-    : '';
 
   return `
-      <div class="card card-compact">
-        <div class="card-row">
-          <img src="${photoUrl}" alt="${name}" class="profile-photo profile-photo-sm" width="72" height="72" />
-          <div class="card-row-body">
-            <p class="streamer-name">${nameAgeLine}</p>
-            ${onlineBadge ? `<p style="margin:4px 0 0;">${onlineBadge}</p>` : ''}
-            <p style="margin:8px 0 0;"><a class="cta-link" href="${profileUrl}">Chat with ${name}</a></p>
-          </div>
-        </div>
-      </div>`;
+    <td width="50%" valign="top" style="padding:8px;">
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border:1px solid #e8e8e8;border-radius:12px;background:#fafafa;">
+        <tr>
+          <td align="center" style="padding:16px 12px 8px;">
+            <img src="${photoUrl}" alt="${name}" width="88" height="88" style="width:88px;height:88px;border-radius:12px;object-fit:cover;border:3px solid #B5458F;display:block;" />
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:0 12px 16px;font-family:Arial,Helvetica,sans-serif;">
+            <p style="margin:0;font-size:16px;font-weight:700;color:#5A2D8A;line-height:1.3;">${nameAgeLine}</p>
+            <p style="margin:10px 0 0;">
+              <a href="${profileUrl}" style="color:#B5458F;font-weight:700;text-decoration:none;font-size:14px;">Chat with ${name}</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td>`;
+};
+
+const renderStreamerGrid = (streamers, frontendUrl) => {
+  const rows = [];
+  for (let i = 0; i < streamers.length; i += 2) {
+    const left = renderStreamerGridCell(streamers[i], frontendUrl);
+    const right = streamers[i + 1]
+      ? renderStreamerGridCell(streamers[i + 1], frontendUrl)
+      : '<td width="50%" style="padding:8px;"></td>';
+    rows.push(`<tr>${left}${right}</tr>`);
+  }
+  return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation">${rows.join('')}</table>`;
 };
 
 /**
@@ -596,7 +612,7 @@ export const sendStreamerReadyToChatEmail = async (
       ? 'Someone is ready to chat with you'
       : 'Members are ready to chat with you';
 
-  const cardsHtml = streamers.map((s) => renderStreamerCard(s, frontendUrl)).join('');
+  const cardsHtml = renderStreamerGrid(streamers, frontendUrl);
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -611,24 +627,7 @@ export const sendStreamerReadyToChatEmail = async (
     .content { padding: 24px; }
     h1 { margin: 0 0 16px; font-size: 24px; color: #1a1a1a; text-align: center; }
     p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; }
-    .card { border: 1px solid #e8e8e8; border-radius: 12px; margin: 16px 0; background: #fafafa; }
-    .card-compact { padding: 14px 16px; }
-    .card-row { display: table; width: 100%; }
-    .card-row-body { display: table-cell; vertical-align: middle; padding-left: 14px; text-align: left; }
-    .photo-wrap { text-align: center; padding: 20px 20px 8px; }
-    .profile-photo {
-      width: 100px; height: 100px; max-width: 100px; max-height: 100px;
-      border-radius: 12px; object-fit: cover; display: inline-block;
-      border: 3px solid #B5458F;
-    }
-    .profile-photo-sm {
-      width: 72px; height: 72px; max-width: 72px; max-height: 72px;
-      display: table-cell; vertical-align: middle;
-    }
-    .card-body { padding: 8px 20px 24px; text-align: center; }
-    .streamer-name { font-size: 18px; font-weight: 700; color: #5A2D8A; margin: 0 0 4px; }
-    .cta-wrap { text-align: center; margin-top: 16px; }
-    .cta, .cta-main {
+    .cta-main {
       display: inline-block;
       background-color: #B5458F;
       background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672);
@@ -659,7 +658,7 @@ export const sendStreamerReadyToChatEmail = async (
       <h1>Hi ${safeRecipient}, members are waiting to meet you</h1>
       ${cardsHtml}
       <div class="browse-wrap">
-        <a class="cta-main" href="${dashboardUrl}">Go to Dashboard</a>
+        <a class="cta-main" href="${dashboardUrl}">See all members</a>
       </div>
     </div>
     <div class="footer">${teamFromName}</div>
@@ -679,7 +678,7 @@ export const sendStreamerReadyToChatEmail = async (
     `Hi ${recipientName || 'there'},`,
     `Members are ready to chat with you on ${appName}:`,
     ...textLines,
-    `Dashboard: ${chatUrl || `${frontendUrl}/dashboard`}`,
+    `See all members: ${chatUrl || `${frontendUrl}/dashboard`}`,
   ].join('\n');
 
   const mailOpts = { fromName };
