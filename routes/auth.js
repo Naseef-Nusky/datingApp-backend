@@ -16,6 +16,8 @@ import jwt from 'jsonwebtoken';
 import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
+import { getFrontendUrl } from '../utils/frontendUrl.js';
+import { normalizeEmailLinkUrl } from '../utils/emailTemplateHelpers.js';
 import {
   findCrmStaffByEmail,
   findAppDatingUserByEmail,
@@ -143,7 +145,7 @@ const notifyContactsWhenUserComesOnline = async (onlineUser, onlineProfile) => {
       attributes: ['id', 'email'],
     });
 
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const frontendUrl = getFrontendUrl();
     const onlineName =
       onlineProfile?.firstName ||
       onlineUser?.email?.split('@')[0] ||
@@ -511,7 +513,7 @@ router.post('/password-reset', [body('email').isEmail()], async (req, res) => {
     await user.save();
 
     // Send email
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+    const resetUrl = `${getFrontendUrl(req)}/reset-password/${resetToken}`;
     
     try {
       await transporter.sendMail({
@@ -657,7 +659,7 @@ router.post('/resend-verification', [body('email').isEmail()], async (req, res) 
     }
 
     // Send verification email
-    const verificationUrl = `${process.env.FRONTEND_URL}/verify-email/${user.verificationToken}`;
+    const verificationUrl = `${getFrontendUrl(req)}/verify-email/${user.verificationToken}`;
     
     try {
       await transporter.sendMail({
@@ -699,7 +701,7 @@ router.post(
       }
 
       const normalizedEmail = req.body.email.toLowerCase().trim();
-      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const frontendUrl = getFrontendUrl(req);
       const linkDelivery = req.body.linkDelivery === 'ios-native' ? 'ios-native' : 'web';
 
       let user = await findRegularMemberByEmail(User, normalizedEmail);
@@ -752,7 +754,9 @@ router.post(
         }
         loginUrl = `${scheme}://auth/login-callback?token=${encodeURIComponent(rawToken)}`;
       } else {
-        loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+        loginUrl = normalizeEmailLinkUrl(
+          `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
+        );
       }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
@@ -1041,7 +1045,7 @@ const getBackendUrl = () => (process.env.BACKEND_URL || `http://localhost:${proc
 router.get('/google', (req, res) => {
   if (!GOOGLE_CLIENT_ID) {
     console.warn('Google OAuth: GOOGLE_CLIENT_ID not set');
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const frontendUrl = getFrontendUrl(req);
     return res.redirect(`${frontendUrl}/?error=google_not_configured`);
   }
   const backendUrl = getBackendUrl();
@@ -1056,7 +1060,7 @@ router.get('/google', (req, res) => {
 // @desc    Handle Google OAuth callback: exchange code for user, create/find user, redirect to frontend with token
 // @access  Public
 router.get('/google/callback', async (req, res) => {
-  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const frontendUrl = getFrontendUrl(req);
   const errorRedirect = (msg) => res.redirect(`${frontendUrl}/?error=${encodeURIComponent(msg)}`);
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
@@ -1149,7 +1153,9 @@ router.get('/google/callback', async (req, res) => {
       { where: { id: user.id } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    const loginUrl = normalizeEmailLinkUrl(
+      `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
+    );
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
 

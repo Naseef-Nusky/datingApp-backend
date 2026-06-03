@@ -4,6 +4,7 @@ import { User, Profile, NewUserStreamerEmail } from '../models/index.js';
 import { getSiteSettings } from './siteSettings.js';
 import { excludeDummyUsersEmailWhere, isDummyUserEmail } from './dummyUser.js';
 import { sendStreamerReadyToChatEmail } from './emailService.js';
+import { getFrontendUrl } from './frontendUrl.js';
 
 const DEFAULT_DELAY_MINUTES = parseInt(process.env.NEW_USER_STREAMER_EMAIL_DELAY_MINUTES || '2', 10);
 
@@ -225,7 +226,7 @@ export const processDueNewUserStreamerEmails = async () => {
 
       row.streamerUserId = streamers[0].id;
 
-      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const frontendUrl = getFrontendUrl();
       const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
       const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
       const dashboardUrl = `${frontendUrl}/dashboard`;
@@ -280,7 +281,7 @@ export const sendNewUserStreamerWelcomeEmailNow = async (userId) => {
     return { sent: false, reason: 'no_matching_streamers', count: 0 };
   }
 
-  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const frontendUrl = getFrontendUrl();
   const recipientName = memberProfile.firstName || newUser.email.split('@')[0] || 'there';
   const streamerPayloads = streamers.map((s) => toStreamerPayload(s, frontendUrl));
   const dashboardUrl = `${frontendUrl}/dashboard`;

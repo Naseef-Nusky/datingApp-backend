@@ -1,4 +1,10 @@
 import nodemailer from 'nodemailer';
+import { getFrontendUrl } from './frontendUrl.js';
+import {
+  buildLoginLinkEmailContent,
+  emailPathLink,
+  normalizeEmailLinkUrl,
+} from './emailTemplateHelpers.js';
 
 // Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
 const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
@@ -134,7 +140,7 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
           ` : ''}
           <p>Log in to your account to read and reply.</p>
           <div style="text-align: center;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/inbox" class="button" style="text-decoration: none;">View Message</a>
+            <a href="${emailPathLink(getFrontendUrl(), '/inbox')}" class="button" style="text-decoration: none;">View Message</a>
           </div>
         </div>
         <div class="footer">
@@ -156,50 +162,42 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
  * @param {string} userId - User ID for footer
  */
 export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') => {
-  const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-  const logoUrl = EMAIL_LOGO_URL;
+  const appName = process.env.SMTP_FROM_NAME || process.env.SENDGRID_FROM_NAME || 'Vantage Dating';
 
-  const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
-    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-    .header { border-bottom: 3px solid #E97672; padding-bottom: 15px; margin-bottom: 20px; }
-    .logo { max-width: 180px; height: auto; }
-    .login-link { color: #5A2D8A; text-decoration: none; }
-    .button { display: inline-block; background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672); color: #fff !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
-    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666; }
-    .footer a { color: #5A2D8A; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <img src="${logoUrl}" alt="${appName}" class="logo" />
-    </div>
-    <p style="font-size: 18px; font-weight: bold;">Hello, ${firstName}!</p>
-    <p>You have requested a login link to access your ${appName} account.</p>
-    <p>Please follow your <a href="${loginUrl}" class="login-link">link to log in</a>.</p>
-    <p style="text-align: center;">
-      <a href="${loginUrl}" class="button">Continue and Log in</a>
-    </p>
-    <p style="font-size: 12px; color: #666;">If you didn't request this, you can ignore this email.</p>
-    <div class="footer">
-      <p>If you would like to hear about bonuses and special offers, please add this address to your contacts.</p>
-      <p>Your ID: ${userId || '—'}</p>
-      <p><a href="${frontendUrl}/terms">Terms</a> · <a href="${frontendUrl}/terms#privacy">Privacy Policy</a> · <a href="${frontendUrl}/terms#refund">Refund and Cancellation Policy</a></p>
-      <p><a href="${frontendUrl}/terms#unsubscribe">Unsubscribe here</a></p>
-    </div>
-  </div>
-</body>
-</html>
-  `;
+  let content;
+  try {
+    content = buildLoginLinkEmailContent({
+      firstName,
+      loginUrl: normalizeEmailLinkUrl(loginUrl),
+      userId,
+      appName,
+    });
+  } catch (err) {
+    console.error('[sendLoginLinkEmail] Invalid login URL:', loginUrl, err.message);
+    return { success: false, error: err.message || 'Invalid login link' };
+  }
 
-  return await sendEmail(to, `Log in to ${appName}`, htmlContent);
+  const mailOpts = {
+    headers: {
+      'List-Unsubscribe': `<${emailPathLink(content.siteBase, '/help')}>`,
+    },
+  };
+  const replyTo =
+    process.env.SENDGRID_REPLY_TO ||
+    process.env.SUPPORT_EMAIL ||
+    process.env.SENDGRID_FROM_EMAIL;
+  if (replyTo && String(replyTo).includes('@')) {
+    mailOpts.replyTo = replyTo;
+  }
+
+  return await sendEmail(
+    to,
+    content.subject,
+    content.htmlContent,
+    content.textContent,
+    [],
+    mailOpts
+  );
 };
 
 /**
@@ -365,7 +363,7 @@ export const sendProfileViewsBatchEmail = async (to, recipientName, viewers) => 
 export const sendAddedToContactsEmail = async (to, recipientName, adder) => {
   const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
   const logoUrl = EMAIL_LOGO_URL;
-  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const frontendUrl = getFrontendUrl();
   const adderName = adder?.name || 'Someone';
   const photoUrl = adder?.photoUrl || `${frontendUrl}/profile.png`;
   const profileUrl = adder?.profileUrl || `${frontendUrl}/profile/${adder?.id || ''}`;
@@ -440,7 +438,7 @@ export const sendAddedToContactsEmail = async (to, recipientName, adder) => {
 export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineUser, chatUrl) => {
   const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
   const logoUrl = EMAIL_LOGO_URL;
-  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const frontendUrl = getFrontendUrl();
   const onlineName = onlineUser?.firstName || 'Someone';
   const photoUrl = onlineUser?.photoUrl || `${frontendUrl}/profile.png`;
   const giftBannerUrl = process.env.EMAIL_GIFT_BANNER_URL || '';
@@ -599,12 +597,14 @@ export const sendStreamerReadyToChatEmail = async (
   const teamFromName =
     process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating Team';
   const logoUrl = EMAIL_LOGO_URL;
-  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const frontendUrl = getFrontendUrl();
   const safeRecipient = escapeHtml(recipientName || 'there');
   const fromName = teamFromName;
 
   const streamers = (Array.isArray(streamer) ? streamer : [streamer]).filter(Boolean);
-  const dashboardUrl = escapeHtml(chatUrl || `${frontendUrl}/dashboard`);
+  const dashboardUrl = escapeHtml(
+    normalizeEmailLinkUrl(chatUrl) || emailPathLink(frontendUrl, '/dashboard')
+  );
   const count = streamers.length;
 
   const subject =

@@ -51,6 +51,8 @@ import {
 } from '../utils/siteSettings.js';
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
+import { getFrontendUrl } from '../utils/frontendUrl.js';
+import { normalizeEmailLinkUrl } from '../utils/emailTemplateHelpers.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
   formatDuration,
@@ -101,14 +103,14 @@ const purgeUserRelatedRecords = async (userId) => {
   await Profile.destroy({ where: { userId } });
 };
 
-const sendCrmCreatedUserLoginLink = async (userId, email, firstName) => {
+const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null) => {
   try {
     const normalizedEmail = String(email || '').toLowerCase().trim();
     if (!normalizedEmail) {
       return { sent: false, error: 'Missing email' };
     }
 
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const frontendUrl = getFrontendUrl(req);
     const rawToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
@@ -117,7 +119,9 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName) => {
       { where: { id: userId } }
     );
 
-    const loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    const loginUrl = normalizeEmailLinkUrl(
+      `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`
+    );
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
 
@@ -728,7 +732,7 @@ router.post(
         await profile.update({ photos: [newPhoto] }, { transaction: t });
       });
 
-      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName, req);
       await recordCrmNewUserEvent(user, { source: 'crm', profile });
       const streamerWelcomeEmail = await scheduleNewUserStreamerEmail(user, profile);
 
@@ -861,7 +865,7 @@ router.post(
         await profile.update({ photos: [newPhoto] }, { transaction: t });
       });
 
-      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName, req);
 
       res.status(201).json({
         message: loginEmail.sent
@@ -964,7 +968,7 @@ router.post(
         },
       });
 
-      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName, req);
       await recordCrmNewUserEvent(user, { source: 'crm', profile });
       const streamerWelcomeEmail = await scheduleNewUserStreamerEmail(user, profile);
 
@@ -1065,7 +1069,7 @@ router.post(
         },
       });
 
-      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName);
+      const loginEmail = await sendCrmCreatedUserLoginLink(user.id, user.email, profile.firstName, req);
 
       res.status(201).json({
         message: loginEmail.sent
