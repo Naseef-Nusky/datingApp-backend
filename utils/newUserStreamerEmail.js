@@ -7,6 +7,27 @@ import { sendStreamerReadyToChatEmail } from './emailService.js';
 import { getFrontendUrl } from './frontendUrl.js';
 
 const DEFAULT_DELAY_MINUTES = parseInt(process.env.NEW_USER_STREAMER_EMAIL_DELAY_MINUTES || '2', 10);
+const MAX_STREAMERS_IN_WELCOME_EMAIL = 3;
+
+const stableIdSort = (a, b) => String(a.id).localeCompare(String(b.id));
+
+/** Rotate which streamers appear — each sent email advances through the pool. */
+const pickRotatingStreamers = async (pool, maxCount, newUserId = null) => {
+  if (!pool.length) return [];
+  const limit = Math.min(maxCount, pool.length);
+  const sentCount = await NewUserStreamerEmail.count({ where: { status: 'sent' } });
+  let userHash = 0;
+  if (newUserId) {
+    const hex = String(newUserId).replace(/-/g, '').slice(0, 8);
+    userHash = Number.parseInt(hex, 16) % pool.length || 0;
+  }
+  const offset = (sentCount * limit + userHash) % pool.length;
+  const picked = [];
+  for (let i = 0; i < limit; i += 1) {
+    picked.push(pool[(offset + i) % pool.length]);
+  }
+  return { picked, offset, poolSize: pool.length };
+};
 
 /** DB may have been created before streamer_user_id was nullable — fix on startup. */
 export const ensureNewUserStreamerEmailSchema = async () => {
@@ -81,15 +102,6 @@ const targetStreamerGendersForMember = (memberProfile) => {
   return ['male', 'female'];
 };
 
-const shuffle = (arr) => {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-};
-
 const toStreamerPayload = (streamer, frontendUrl) => ({
   id: streamer.id,
   firstName: streamer.profile?.firstName || streamer.email?.split('@')[0] || 'Someone',
@@ -99,8 +111,10 @@ const toStreamerPayload = (streamer, frontendUrl) => ({
   isOnline: Boolean(streamer.profile?.isOnline),
 });
 
-/** All active streamers/talent matching the new member's seeking preference (online listed first). */
-export const pickStreamersForWelcomeEmail = async (memberProfile) => {
+/**
+ * Up to 3 gender-matched streamers; rotates through the pool each welcome email.
+ */
+export const pickStreamersForWelcomeEmail = async (memberProfile, options = {}) => {
   const targetGenders = targetStreamerGendersForMember(memberProfile);
 
   const streamers = await User.findAll({
@@ -135,24 +149,26 @@ export const pickStreamersForWelcomeEmail = async (memberProfile) => {
     return [];
   }
 
-  const byName = (a, b) =>
-    String(a.profile?.firstName || '').localeCompare(String(b.profile?.firstName || ''), undefined, {
-      sensitivity: 'base',
-    });
-
-  const online = eligible.filter((s) => s.profile?.isOnline).sort(byName);
-  const offline = eligible.filter((s) => !s.profile?.isOnline).sort(byName);
-  const ordered = [...online, ...offline];
+  const online = eligible.filter((s) => s.profile?.isOnline).sort(stableIdSort);
+  const offline = eligible.filter((s) => !s.profile?.isOnline).sort(stableIdSort);
+  const pool = [...online, ...offline];
   if (!online.length) {
     console.warn(
       '[newUserStreamerEmail] No online streamer matching preference; including offline streamers'
     );
   }
 
-  console.log(
-    `[newUserStreamerEmail] Including all ${ordered.length} matching streamer(s) in welcome email`
+  const maxCount = MAX_STREAMERS_IN_WELCOME_EMAIL;
+  const { picked, offset, poolSize } = await pickRotatingStreamers(
+    pool,
+    maxCount,
+    options.newUserId || null
   );
-  return ordered;
+
+  console.log(
+    `[newUserStreamerEmail] Picked ${picked.length} of ${poolSize} matching streamer(s) (max ${maxCount}, rotate offset ${offset})`
+  );
+  return picked;
 };
 
 /**
@@ -219,7 +235,9 @@ export const processDueNewUserStreamerEmails = async () => {
       }
 
       const memberProfile = newUser.profile || {};
-      const streamers = await pickStreamersForWelcomeEmail(memberProfile);
+      const streamers = await pickStreamersForWelcomeEmail(memberProfile, {
+        newUserId: row.newUserId,
+      });
       if (!streamers.length) {
         row.sendAt = new Date(Date.now() + RETRY_WHEN_OFFLINE_MINUTES * 60 * 1000);
         row.error = 'no_streamer_available_retry';
@@ -282,7 +300,7 @@ export const sendNewUserStreamerWelcomeEmailNow = async (userId) => {
   }
 
   const memberProfile = newUser.profile || {};
-  const streamers = await pickStreamersForWelcomeEmail(memberProfile);
+  const streamers = await pickStreamersForWelcomeEmail(memberProfile, { newUserId: userId });
   if (!streamers.length) {
     return { sent: false, reason: 'no_matching_streamers', count: 0 };
   }
