@@ -504,8 +504,12 @@ router.get('/users', protect, admin, async (req, res) => {
       andParts.push({ isAdminCreated: false });
     }
 
-    // CRM streamer "New users": only members who finished onboarding (not login-link-only signups)
-    if (registrationComplete === '1' || registrationComplete === 'true') {
+    // Real users (CRM): hide login-link-only accounts until onboarding is finished
+    if (
+      type === 'real' ||
+      registrationComplete === '1' ||
+      registrationComplete === 'true'
+    ) {
       andParts.push({ registrationComplete: true });
     }
 

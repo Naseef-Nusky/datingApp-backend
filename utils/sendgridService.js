@@ -595,10 +595,11 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       trackingData.notificationType === 'login_link' ||
       trackingData.notificationType === 'password_reset';
 
-    // Off unless explicitly enabled — tracked url#### links hurt Outlook/iCloud inbox placement
+    // Never rewrite login/reset links; optional tracking for marketing mail only
     const enableClickTracking =
-      process.env.SENDGRID_CLICK_TRACKING === 'true' ||
-      process.env.SENDGRID_CLICK_TRACKING === '1';
+      !isTransactional &&
+      (process.env.SENDGRID_CLICK_TRACKING === 'true' ||
+        process.env.SENDGRID_CLICK_TRACKING === '1');
 
     const preferencesUrl = `${FRONTEND_URL}/help`;
     const deliverabilityHeaders = {
@@ -633,7 +634,7 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       text: plainText,
       trackingSettings: enableClickTracking
         ? {
-            clickTracking: { enable: true },
+            clickTracking: { enable: true, enableText: true },
             openTracking: { enable: true },
           }
         : {
@@ -656,7 +657,7 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
     console.log('📧 [SendGrid] ========== SENDING EMAIL NOW ==========');
     console.log('📧 [SendGrid] Timestamp:', new Date().toISOString());
     console.log('📧 [SendGrid] Sending email from:', FROM_EMAIL, 'to:', to);
-    console.log('📧 [SendGrid] Click tracking:', enableClickTracking ? 'ON' : 'OFF');
+    console.log('📧 [SendGrid] Click tracking:', enableClickTracking ? 'ON' : 'OFF', isTransactional ? '(transactional)' : '');
     console.log('📧 [SendGrid] Subject:', subject);
     console.log('📧 [SendGrid] FROM_NAME:', FROM_NAME);
     console.log('📧 [SendGrid] Has HTML content:', !!htmlContent);
