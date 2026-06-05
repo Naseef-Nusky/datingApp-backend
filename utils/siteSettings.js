@@ -12,7 +12,7 @@ export const DEFAULT_SITE_SETTINGS = {
   /** After a new member registers, queue an email from a random streamer ("ready to chat"). */
   enableNewUserStreamerEmail: true,
   /** Minutes to wait before sending (default 2). */
-  newUserStreamerEmailDelayMinutes: 2,
+  newUserStreamerEmailDelayMinutes: 60,
 };
 
 let cache = { value: null, at: 0 };

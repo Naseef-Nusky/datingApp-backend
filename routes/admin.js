@@ -469,10 +469,21 @@ router.get('/users', protect, admin, async (req, res) => {
     if (req.user.userType === 'crm_streamer') {
       req.query.type = 'real';
       req.query.excludeDummy = '1';
+      req.query.registrationComplete = '1';
+      req.query.organicOnly = '1';
     }
 
-    const { filter, type, gender, createdFrom, createdTo, newUsers, excludeDummy, organicOnly } =
-      req.query;
+    const {
+      filter,
+      type,
+      gender,
+      createdFrom,
+      createdTo,
+      newUsers,
+      excludeDummy,
+      organicOnly,
+      registrationComplete,
+    } = req.query;
 
     const andParts = [];
     andParts.push({
@@ -491,6 +502,11 @@ router.get('/users', protect, admin, async (req, res) => {
 
     if (organicOnly === '1' || organicOnly === 'true') {
       andParts.push({ isAdminCreated: false });
+    }
+
+    // CRM streamer "New users": only members who finished onboarding (not login-link-only signups)
+    if (registrationComplete === '1' || registrationComplete === 'true') {
+      andParts.push({ registrationComplete: true });
     }
 
     const createdAtFilter = {};
@@ -572,7 +588,8 @@ router.get('/users', protect, admin, async (req, res) => {
         profileInclude,
       ],
       attributes: [
-        'id', 'email', 'userType', 'isActive', 'isVerified', 'isAdminCreated', 'createdAt', 'lastLogin', 'credits',
+        'id', 'email', 'userType', 'isActive', 'isVerified', 'isAdminCreated', 'registrationComplete',
+        'createdAt', 'updatedAt', 'lastLogin', 'credits',
         'totalCreditsSpent', 'lastCreditSpentAt', 'vipActive', 'vipExpiresAt', 'subscriptionPlan',
         'subscriptionExpires', 'subscriptionCancelledAt', 'subscriptionEndsAt', 'monthlyCreditRefill',
         'verificationStatus', 'verifiedAt', 'verificationExpiresAt', 'reverifyRequiredAt', 'verificationProvider',

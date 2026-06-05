@@ -1,4 +1,5 @@
 import sgMail from '@sendgrid/mail';
+import { getEmailBrandFooterHtml } from './emailFooter.js';
 import sendgridPkg from '@sendgrid/client';
 import https from 'node:https';
 import path from 'path';
@@ -31,7 +32,7 @@ if (process.env.SENDGRID_API_KEY) {
 
 // Get FROM email - must be verified in SendGrid (use your own domain to reduce spam)
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
-const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating Team';
+const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating';
 const REPLY_TO = process.env.SENDGRID_REPLY_TO || process.env.SUPPORT_EMAIL || FROM_EMAIL;
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 // Logo URL for SendGrid emails (DigitalOcean Spaces); override with SENDGRID_LOGO_URL or PUBLIC_LOGO_URL if needed
@@ -229,10 +230,9 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
       ${content}
     </div>
     <div class="footer">
-      <p style="margin: 0 0 5px 0; color: #4B5563;">Meet awesome people</p>
-      <p style="margin: 0 0 15px 0; color: #4B5563; font-weight: 600;">on <strong>Vantage Dating</strong></p>
-      ${unsubscribeUrl ? `<p style="margin-top: 15px;"><a href="${unsubscribeUrl}" style="color: #FF6B35; text-decoration: none;">Manage Email Preferences</a></p>` : ''}
-      <p style="margin-top: 15px; font-size: 10px; color: #999;">
+      ${getEmailBrandFooterHtml(FRONTEND_URL)}
+      ${unsubscribeUrl ? `<p style="margin-top: 12px;"><a href="${unsubscribeUrl}" style="color: #FF6B35; text-decoration: none;">Manage Email Preferences</a></p>` : ''}
+      <p style="margin-top: 12px; font-size: 10px; color: #999;">
         This is an automated notification from Vantage Dating
       </p>
     </div>
@@ -518,8 +518,7 @@ export const getOnlineNotificationTemplate = (onlineUserData) => {
       </div>
     </div>
     <div class="footer">
-      <p style="margin: 0;">Meet awesome people</p>
-      <p style="margin: 4px 0 0 0;"><strong>on Vantage Dating</strong></p>
+      ${getEmailBrandFooterHtml(FRONTEND_URL)}
     </div>
   </div>
 </body>
@@ -596,10 +595,10 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       trackingData.notificationType === 'login_link' ||
       trackingData.notificationType === 'password_reset';
 
+    // Off unless explicitly enabled — tracked url#### links hurt Outlook/iCloud inbox placement
     const enableClickTracking =
-      !isTransactional &&
-      (process.env.SENDGRID_CLICK_TRACKING === 'true' ||
-        process.env.SENDGRID_CLICK_TRACKING === '1');
+      process.env.SENDGRID_CLICK_TRACKING === 'true' ||
+      process.env.SENDGRID_CLICK_TRACKING === '1';
 
     const preferencesUrl = `${FRONTEND_URL}/help`;
     const deliverabilityHeaders = {

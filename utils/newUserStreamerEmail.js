@@ -28,10 +28,16 @@ const RETRY_WHEN_OFFLINE_MINUTES = parseInt(
   10
 );
 
+const marketingEmailsPaused = () =>
+  process.env.ENABLE_NEW_USER_STREAMER_EMAIL === 'false' ||
+  process.env.ENABLE_NEW_USER_STREAMER_EMAIL === '0' ||
+  process.env.PAUSE_MARKETING_EMAILS === 'true' ||
+  process.env.PAUSE_MARKETING_EMAILS === '1';
+
 export const getNewUserStreamerEmailSettings = async () => {
   const site = await getSiteSettings();
   return {
-    enabled: site.enableNewUserStreamerEmail !== false,
+    enabled: !marketingEmailsPaused() && site.enableNewUserStreamerEmail !== false,
     delayMinutes:
       Number.isFinite(Number(site.newUserStreamerEmailDelayMinutes)) &&
       Number(site.newUserStreamerEmailDelayMinutes) > 0

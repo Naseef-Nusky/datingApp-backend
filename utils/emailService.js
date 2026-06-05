@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { getEmailFrontendUrl } from './frontendUrl.js';
+import { getEmailBrandFooterHtml, getEmailBrandFooterText } from './emailFooter.js';
 
 // Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
 const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
@@ -144,7 +145,8 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
           </div>
         </div>
         <div class="footer">
-          <p>This is an automated notification from Vantage Dating.</p>
+          <p style="margin: 0 0 12px 0;">This is an automated notification from Vantage Dating.</p>
+          ${getEmailBrandFooterHtml(getEmailFrontendUrl())}
         </div>
       </div>
     </body>
@@ -198,7 +200,7 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
     </p>
     <p style="font-size: 12px; color: #666;">If you didn't request this, you can ignore this email.</p>
     <div class="footer">
-      <p><a href="${frontendUrl}/help">Help</a> · <a href="${frontendUrl}/contact">Contact</a> · <a href="${frontendUrl}/privacy">Privacy</a></p>
+      ${getEmailBrandFooterHtml(frontendUrl)}
     </div>
   </div>
 </body>
@@ -209,6 +211,8 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
     `Hello, ${firstName || 'there'},`,
     `Sign in to ${brandName}: ${loginUrl}`,
     `If you did not request this, ignore this email.`,
+    '',
+    getEmailBrandFooterText(frontendUrl),
   ].join('\n');
 
   return await sendEmail(to, `Your ${brandName} sign-in link`, htmlContent, textContent, [], {
@@ -269,7 +273,8 @@ export const sendProfileViewNotificationEmail = async (to, recipientName, profil
       <a class="cta" href="${profileUrl}">Open my profile</a>
     </div>
     <div class="footer">
-      <p>This automatic notification was sent because a member viewed your profile on ${appName}.</p>
+      <p style="margin: 0 0 12px 0; font-size: 11px; color: #8a8a8a;">This automatic notification was sent because a member viewed your profile on ${appName}.</p>
+      ${getEmailBrandFooterHtml(getEmailFrontendUrl())}
     </div>
   </div>
 </body>
@@ -355,7 +360,8 @@ export const sendProfileViewsBatchEmail = async (to, recipientName, viewers) => 
       <div class="profiles">${profileCards}</div>
     </div>
     <div class="footer">
-      This notification was sent because members viewed your profile on ${appName}.
+      <p style="margin: 0 0 12px 0;">This notification was sent because members viewed your profile on ${appName}.</p>
+      ${getEmailBrandFooterHtml(getEmailFrontendUrl())}
     </div>
   </div>
 </body>
@@ -429,7 +435,8 @@ export const sendAddedToContactsEmail = async (to, recipientName, adder) => {
       </div>
     </div>
     <div class="footer">
-      This notification was sent because someone added you to their contacts on ${appName}.
+      <p style="margin: 0 0 12px 0;">This notification was sent because someone added you to their contacts on ${appName}.</p>
+      ${getEmailBrandFooterHtml(getEmailFrontendUrl())}
     </div>
   </div>
 </body>
@@ -454,7 +461,7 @@ export const sendAddedToContactsEmail = async (to, recipientName, adder) => {
 export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineUser, chatUrl) => {
   const appName = process.env.SMTP_FROM_NAME || 'Vantage Dating';
   const logoUrl = EMAIL_LOGO_URL;
-  const frontendUrl = getFrontendUrl();
+  const frontendUrl = getEmailFrontendUrl();
   const onlineName = onlineUser?.firstName || 'Someone';
   const photoUrl = onlineUser?.photoUrl || `${frontendUrl}/profile.png`;
   const giftBannerUrl = process.env.EMAIL_GIFT_BANNER_URL || '';
@@ -528,7 +535,7 @@ export const sendUserOnlineNotificationEmail = async (to, recipientName, onlineU
       ${giftBannerUrl ? `<div class="gift-banner"><img src="${giftBannerUrl}" alt="Share virtual gifts" /></div>` : ''}
     </div>
     <div class="footer">
-      If you would like to hear about bonuses, discounts and special offers from ${appName}, please add this address to your contacts list.
+      ${getEmailBrandFooterHtml(frontendUrl)}
     </div>
   </div>
 </body>
@@ -613,7 +620,7 @@ export const sendStreamerReadyToChatEmail = async (
   const teamFromName =
     process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating Team';
   const logoUrl = EMAIL_LOGO_URL;
-  const frontendUrl = getFrontendUrl();
+  const frontendUrl = getEmailFrontendUrl();
   const safeRecipient = escapeHtml(recipientName || 'there');
   const fromName = teamFromName;
 
@@ -675,7 +682,7 @@ export const sendStreamerReadyToChatEmail = async (
         <a class="cta-main" href="${dashboardUrl}">See all members</a>
       </div>
     </div>
-    <div class="footer">${teamFromName}</div>
+    <div class="footer">${getEmailBrandFooterHtml(frontendUrl)}</div>
   </div>
 </body>
 </html>
@@ -693,6 +700,8 @@ export const sendStreamerReadyToChatEmail = async (
     `Members are ready to chat with you on ${appName}:`,
     ...textLines,
     `See all members: ${chatUrl || `${frontendUrl}/dashboard`}`,
+    '',
+    getEmailBrandFooterText(frontendUrl),
   ].join('\n');
 
   const mailOpts = { fromName };
