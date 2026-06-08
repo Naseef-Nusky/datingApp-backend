@@ -68,6 +68,28 @@ export async function findStreamerByEmail(User, email) {
   return User.findOne({ where: streamerEmailWhere(normalized) });
 }
 
+/** Any row in users — email is globally unique across all account types. */
+export async function findAnyUserByEmail(User, email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  return User.findOne({ where: emailIlikeWhere(normalized) });
+}
+
+export function duplicateEmailMessage(existingUser, intent = 'account') {
+  if (!existingUser) return null;
+  const type = String(existingUser.userType || 'account');
+  if (intent === 'streamer' && (type === 'streamer' || type === 'talent')) {
+    return 'This email is already registered as a streamer. Please use a different email.';
+  }
+  if (intent === 'member' && type === 'regular') {
+    return 'This email is already registered as a member. Please use a different email.';
+  }
+  if (intent === 'crm' && CRM_SYSTEM_USER_TYPES.includes(type)) {
+    return 'This email is already registered as a CRM user. Please use a different email.';
+  }
+  return `This email is already registered (${type}). Please use a different email.`;
+}
+
 export function isCrmSystemUser(userType) {
   return CRM_SYSTEM_USER_TYPES.includes(userType);
 }

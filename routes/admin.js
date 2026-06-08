@@ -4,6 +4,10 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import multer from 'multer';
+import {
+  profileImageMulterFilter,
+  normalizeProfileImageBuffer,
+} from '../utils/imageUpload.js';
 import { v4 as uuidv4 } from 'uuid';
 import { body, validationResult } from 'express-validator';
 import {
@@ -40,8 +44,25 @@ import {
   findCrmStaffByEmail,
   findRegularMemberByEmail,
   findStreamerByEmail,
+  duplicateEmailMessage,
   normalizeEmail,
 } from '../utils/userEmailScope.js';
+
+const duplicateEmailResponse = (error, res) => {
+  const isDuplicate =
+    error?.name === 'SequelizeUniqueConstraintError' || error?.original?.code === '23505';
+  if (!isDuplicate) return null;
+  const detail = String(error?.original?.detail || error?.message || '');
+  if (/email/i.test(detail) || error?.fields?.email) {
+    return res.status(400).json({
+      message:
+        'This email is already registered for this account type. Please use a different email.',
+    });
+  }
+  return res.status(400).json({
+    message: 'A record with these details already exists.',
+  });
+};
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
 import { getCreditSettings, updateCreditSettings } from '../utils/creditSettings.js';
 import {
@@ -154,10 +175,7 @@ const refillPackImageUpload = wishlistUpload; // same config, folder set in save
 const profilePhotoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files are allowed'), false);
-  },
+  fileFilter: profileImageMulterFilter,
 });
 
 // ============================================
@@ -647,6 +665,60 @@ const normalizeCrmSeeking = (raw) => {
   return null;
 };
 
+// @route   POST /api/admin/check-email
+// @desc    CRM: check if email is already registered for the selected account type
+// @access  Admin
+router.post(
+  '/check-email',
+  protect,
+  admin,
+  [
+    body('email').isEmail().withMessage('Valid email is required'),
+    body('accountType')
+      .isIn(['member', 'streamer', 'crm'])
+      .withMessage('accountType must be member, streamer, or crm'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ message: errors.array()[0]?.msg || 'Invalid request' });
+      }
+
+      const email = normalizeEmail(req.body.email);
+      const { accountType } = req.body;
+
+      let existing = null;
+      let intent = 'account';
+      if (accountType === 'member') {
+        existing = await findRegularMemberByEmail(User, email);
+        intent = 'member';
+      } else if (accountType === 'streamer') {
+        existing = await findStreamerByEmail(User, email);
+        intent = 'streamer';
+      } else if (accountType === 'crm') {
+        existing = await findCrmStaffByEmail(User, email);
+        intent = 'crm';
+      }
+
+      if (existing) {
+        return res.status(200).json({
+          exists: true,
+          message: duplicateEmailMessage(existing, intent),
+        });
+      }
+
+      return res.status(200).json({
+        exists: false,
+        message: 'Email is available',
+      });
+    } catch (error) {
+      console.error('Error checking email:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   POST /api/admin/users/with-photo
 // @desc    CRM: create regular user + profile + main photo in one transaction, then send login email (no orphan users without photo).
 // @access  Superadmin or Viewer
@@ -695,8 +767,9 @@ router.post(
           : crypto.randomBytes(24).toString('hex');
 
       const existingMember = await findRegularMemberByEmail(User, email);
-      if (existingMember) {
-        return res.status(400).json({ message: 'A member account with this email already exists' });
+      const duplicateMemberMsg = duplicateEmailMessage(existingMember, 'member');
+      if (duplicateMemberMsg) {
+        return res.status(400).json({ message: duplicateMemberMsg });
       }
 
       const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
@@ -735,11 +808,16 @@ router.post(
           },
           { transaction: t }
         );
-        const photoUrl = await uploadToSpaces(
+        const image = await normalizeProfileImageBuffer(
           req.file.buffer,
           req.file.mimetype,
-          'profiles/photos',
           req.file.originalname
+        );
+        const photoUrl = await uploadToSpaces(
+          image.buffer,
+          image.mimetype,
+          'profiles/photos',
+          image.originalname
         );
         const newPhoto = {
           url: photoUrl,
@@ -774,6 +852,11 @@ router.post(
       });
     } catch (error) {
       console.error('Error creating user with photo:', error);
+      if (duplicateEmailResponse(error, res)) return;
+      const msg = String(error?.message || '');
+      if (/heic|image|photo/i.test(msg)) {
+        return res.status(400).json({ message: msg });
+      }
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }
@@ -827,8 +910,9 @@ router.post(
           : crypto.randomBytes(24).toString('hex');
 
       const existingStreamer = await findStreamerByEmail(User, email);
-      if (existingStreamer) {
-        return res.status(400).json({ message: 'A streamer account with this email already exists' });
+      const duplicateStreamerMsg = duplicateEmailMessage(existingStreamer, 'streamer');
+      if (duplicateStreamerMsg) {
+        return res.status(400).json({ message: duplicateStreamerMsg });
       }
 
       const city = typeof hometown === 'string' ? (hometown.split(',')[0] || '').trim() : '';
@@ -868,11 +952,16 @@ router.post(
           },
           { transaction: t }
         );
-        const photoUrl = await uploadToSpaces(
+        const image = await normalizeProfileImageBuffer(
           req.file.buffer,
           req.file.mimetype,
-          'profiles/photos',
           req.file.originalname
+        );
+        const photoUrl = await uploadToSpaces(
+          image.buffer,
+          image.mimetype,
+          'profiles/photos',
+          image.originalname
         );
         const newPhoto = {
           url: photoUrl,
@@ -904,6 +993,11 @@ router.post(
       });
     } catch (error) {
       console.error('Error creating streamer with photo:', error);
+      if (duplicateEmailResponse(error, res)) return;
+      const msg = String(error?.message || '');
+      if (/heic|image|photo/i.test(msg)) {
+        return res.status(400).json({ message: msg });
+      }
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }
@@ -1387,11 +1481,16 @@ router.post(
       if (!profile) {
         return res.status(404).json({ message: 'Profile not found' });
       }
-      const photoUrl = await uploadToSpaces(
+      const image = await normalizeProfileImageBuffer(
         req.file.buffer,
         req.file.mimetype,
-        'profiles/photos',
         req.file.originalname
+      );
+      const photoUrl = await uploadToSpaces(
+        image.buffer,
+        image.mimetype,
+        'profiles/photos',
+        image.originalname
       );
       const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
       if (photos.length > 0 && photos[0]?.url && photos[0].url.includes('digitaloceanspaces.com')) {

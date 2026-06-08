@@ -14,6 +14,10 @@ import { sendProfileViewsBatchEmail } from '../utils/emailService.js';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadToSpaces, deleteFromSpaces } from '../utils/spacesUpload.js';
+import {
+  profileImageMulterFilter,
+  normalizeProfileImageBuffer,
+} from '../utils/imageUpload.js';
 import { isDummyUserEmail, excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
 
 const router = express.Router();
@@ -63,13 +67,7 @@ const upload = multer({
     fileSize: 50 * 1024 * 1024, // 50MB — align with stories route & nginx `client_max_body_size`
     fieldSize: 5 * 1024 * 1024, // text fields in the same multipart request
   },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'), false);
-    }
-  },
+  fileFilter: profileImageMulterFilter,
 });
 
 // @route   GET /api/profiles
@@ -781,11 +779,16 @@ router.post('/me/photos', protect, upload.single('photo'), async (req, res) => {
 
     // Step 1: Upload to DigitalOcean Spaces
     console.log('Uploading photo to DigitalOcean Spaces...');
-    const photoUrl = await uploadToSpaces(
+    const image = await normalizeProfileImageBuffer(
       req.file.buffer,
       req.file.mimetype,
-      'profiles/photos',
       req.file.originalname
+    );
+    const photoUrl = await uploadToSpaces(
+      image.buffer,
+      image.mimetype,
+      'profiles/photos',
+      image.originalname
     );
     console.log('Photo uploaded to Spaces:', photoUrl);
 
@@ -857,11 +860,16 @@ router.post('/me/photos/add', protect, upload.single('photo'), async (req, res) 
 
     // Step 1: Upload to DigitalOcean Spaces
     console.log('Uploading additional photo to DigitalOcean Spaces...');
-    const photoUrl = await uploadToSpaces(
+    const image = await normalizeProfileImageBuffer(
       req.file.buffer,
       req.file.mimetype,
-      'profiles/photos',
       req.file.originalname
+    );
+    const photoUrl = await uploadToSpaces(
+      image.buffer,
+      image.mimetype,
+      'profiles/photos',
+      image.originalname
     );
     console.log('Additional photo uploaded to Spaces:', photoUrl);
 
@@ -925,11 +933,16 @@ router.post('/me/cover-photo', protect, upload.single('coverPhoto'), async (req,
 
     // Step 1: Upload to DigitalOcean Spaces
     console.log('Uploading cover photo to DigitalOcean Spaces...');
-    const coverPhotoUrl = await uploadToSpaces(
+    const image = await normalizeProfileImageBuffer(
       req.file.buffer,
       req.file.mimetype,
-      'profiles/cover-photos',
       req.file.originalname
+    );
+    const coverPhotoUrl = await uploadToSpaces(
+      image.buffer,
+      image.mimetype,
+      'profiles/cover-photos',
+      image.originalname
     );
     console.log('Cover photo uploaded to Spaces:', coverPhotoUrl);
 

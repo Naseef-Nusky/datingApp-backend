@@ -70,7 +70,8 @@ const connectDB = async () => {
     if (shouldSync) {
       console.log('🔄 Syncing database models...');
       try {
-        await sequelize.sync({ force: false, alter: true });
+        // alter:true repeatedly adds duplicate UNIQUE(email) constraints on users; use migrations instead.
+        await sequelize.sync({ force: false, alter: false });
         console.log('✅ Database models synchronized - All tables created/updated');
         
         // Verify tables were created
