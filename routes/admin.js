@@ -84,43 +84,101 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
+const purgeOpts = (transaction) => (transaction ? { transaction } : {});
+
 /** Remove rows that reference a user before hard-deleting the user record. */
-const purgeUserRelatedRecords = async (userId) => {
+const purgeUserRelatedRecords = async (userId, transaction = null) => {
+  const opts = purgeOpts(transaction);
+
+  const profile = await Profile.findOne({ where: { userId }, ...opts });
+  if (profile?.photos?.length) {
+    for (const photo of profile.photos) {
+      if (!photo?.url) continue;
+      try {
+        await deleteFromSpaces(photo.url);
+      } catch (spacesErr) {
+        console.warn('Could not delete profile photo from storage:', spacesErr.message);
+      }
+    }
+  }
+
+  const userChats = await Chat.findAll({
+    where: { [Op.or]: [{ user1Id: userId }, { user2Id: userId }] },
+    attributes: ['id'],
+    ...opts,
+  });
+  const chatIds = userChats.map((c) => c.id);
+  if (chatIds.length) {
+    await Message.destroy({ where: { chatId: { [Op.in]: chatIds } }, ...opts });
+  }
   await Message.destroy({
     where: { [Op.or]: [{ sender: userId }, { receiver: userId }] },
+    ...opts,
+  });
+
+  await EngagementSession.destroy({
+    where: { [Op.or]: [{ streamerId: userId }, { memberId: userId }] },
+    ...opts,
   });
   await ChatRequest.destroy({
     where: { [Op.or]: [{ senderId: userId }, { receiverId: userId }] },
+    ...opts,
   });
   await CallRequest.destroy({
     where: { [Op.or]: [{ callerId: userId }, { receiverId: userId }] },
+    ...opts,
   });
   await Gift.destroy({
     where: { [Op.or]: [{ sender: userId }, { receiver: userId }] },
+    ...opts,
   });
-  await CreditTransaction.destroy({ where: { userId } });
-  await Notification.destroy({ where: { userId } });
+  await CreditTransaction.destroy({ where: { userId }, ...opts });
+  await Notification.destroy({ where: { userId }, ...opts });
+
+  await Report.update(
+    { reviewedBy: null, reviewedAt: null },
+    { where: { reviewedBy: userId }, ...opts }
+  );
   await Report.destroy({
     where: { [Op.or]: [{ reporter: userId }, { reportedUser: userId }] },
+    ...opts,
   });
   await Block.destroy({
     where: { [Op.or]: [{ blocker: userId }, { blocked: userId }] },
+    ...opts,
   });
   await Match.destroy({
     where: { [Op.or]: [{ user1: userId }, { user2: userId }] },
+    ...opts,
   });
-  await Story.destroy({ where: { userId } });
+  await Story.destroy({ where: { userId }, ...opts });
   await Chat.destroy({
     where: { [Op.or]: [{ user1Id: userId }, { user2Id: userId }] },
+    ...opts,
   });
-  await EngagementSession.destroy({
-    where: { [Op.or]: [{ streamerId: userId }, { memberId: userId }] },
-  });
-  await CrmEvent.destroy({ where: { userId } });
+  await CrmEvent.destroy({ where: { userId }, ...opts });
   await NewUserStreamerEmail.destroy({
     where: { [Op.or]: [{ newUserId: userId }, { streamerUserId: userId }] },
+    ...opts,
   });
-  await Profile.destroy({ where: { userId } });
+  await Profile.destroy({ where: { userId }, ...opts });
+};
+
+const canPermanentlyDeleteDatingUsers = (req) =>
+  req.user?.userType === 'superadmin' || req.user?.userType === 'viewer';
+
+const permanentlyDeleteDatingUser = async (user) => {
+  const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'];
+  if (adminRoles.includes(user.userType)) {
+    const err = new Error('Cannot delete admin or CRM staff users via this endpoint');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await sequelize.transaction(async (t) => {
+    await purgeUserRelatedRecords(user.id, t);
+    await user.destroy({ transaction: t });
+  });
 };
 
 const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null) => {
@@ -1290,11 +1348,70 @@ router.put('/users/:id/toggle-verified', protect, admin, notCrmStreamerStaff, as
   }
 });
 
+// @route   POST /api/admin/users/purge-email
+// @desc    Permanently delete a dating user by email (recovery when email still blocked after remove)
+// @access  Superadmin or Viewer
+router.post(
+  '/users/purge-email',
+  protect,
+  admin,
+  [
+    body('email').isEmail().withMessage('Valid email is required'),
+    body('accountType')
+      .isIn(['member', 'streamer'])
+      .withMessage('accountType must be member or streamer'),
+  ],
+  async (req, res) => {
+    try {
+      if (!canPermanentlyDeleteDatingUsers(req)) {
+        return res.status(403).json({ message: 'You do not have permission to delete users' });
+      }
+
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ message: errors.array()[0]?.msg || 'Invalid request' });
+      }
+
+      const email = normalizeEmail(req.body.email);
+      const { accountType } = req.body;
+
+      const user =
+        accountType === 'streamer'
+          ? await findStreamerByEmail(User, email)
+          : await findRegularMemberByEmail(User, email);
+
+      if (!user) {
+        return res.status(404).json({
+          message: `No ${accountType} account found with this email`,
+        });
+      }
+
+      await permanentlyDeleteDatingUser(user);
+
+      return res.json({
+        message: 'User and all related data permanently deleted',
+        deletedEmail: email,
+        accountType,
+      });
+    } catch (error) {
+      console.error('Error purging user by email:', error);
+      if (error.statusCode === 400) {
+        return res.status(400).json({ message: error.message });
+      }
+      return res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   DELETE /api/admin/users/:id
-// @desc    Permanently delete a non-admin user (real user or streamer) and their profile
-// @access  Superadmin only
-router.delete('/users/:id', protect, superadmin, async (req, res) => {
+// @desc    Permanently delete a dating user (member or streamer) and all related data
+// @access  Superadmin or Viewer
+router.delete('/users/:id', protect, admin, async (req, res) => {
   try {
+    if (!canPermanentlyDeleteDatingUsers(req)) {
+      return res.status(403).json({ message: 'You do not have permission to delete users' });
+    }
+
     const { id } = req.params;
 
     const user = await User.findByPk(id);
@@ -1302,26 +1419,23 @@ router.delete('/users/:id', protect, superadmin, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Never allow deleting admin/superadmin/moderator/viewer with this endpoint
-    const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer'];
-    if (adminRoles.includes(user.userType)) {
-      return res.status(400).json({ message: 'Cannot delete admin users via this endpoint' });
-    }
+    await permanentlyDeleteDatingUser(user);
 
-    await purgeUserRelatedRecords(id);
-
-    // Finally delete the user record (hard delete)
-    await user.destroy();
-
-    res.json({ message: 'User deleted successfully' });
+    res.json({
+      message: 'User and all related data permanently deleted',
+      deletedEmail: user.email,
+    });
   } catch (error) {
     console.error('Error deleting user:', error);
+    if (error.statusCode === 400) {
+      return res.status(400).json({ message: error.message });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
 // @route   DELETE /api/admin/users
-// @desc    Permanently delete all non-admin users (optionally by type: all|real|streamers)
+// @desc    Permanently delete all dating users (optionally by type: all|real|streamers)
 // @access  Superadmin only
 router.delete('/users', protect, superadmin, async (req, res) => {
   try {
@@ -1333,12 +1447,12 @@ router.delete('/users', protect, superadmin, async (req, res) => {
           ? { [Op.in]: ['streamer', 'talent'] }
           : type === 'real'
             ? 'regular'
-            : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer'] },
+            : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'] },
     };
 
     const users = await User.findAll({
       where,
-      attributes: ['id', 'userType'],
+      attributes: ['id', 'userType', 'email'],
     });
 
     if (users.length === 0) {
@@ -1346,18 +1460,20 @@ router.delete('/users', protect, superadmin, async (req, res) => {
     }
 
     let deletedCount = 0;
+    const failures = [];
     for (const user of users) {
-      const id = user.id;
-
-      await purgeUserRelatedRecords(id);
-      await user.destroy();
-
-      deletedCount++;
+      try {
+        await permanentlyDeleteDatingUser(user);
+        deletedCount++;
+      } catch (err) {
+        failures.push({ id: user.id, email: user.email, error: err.message });
+      }
     }
 
     return res.json({
-      message: `Deleted ${deletedCount} users successfully`,
+      message: `Permanently deleted ${deletedCount} user(s)`,
       deletedCount,
+      failures,
     });
   } catch (error) {
     console.error('Error deleting users in bulk:', error);
