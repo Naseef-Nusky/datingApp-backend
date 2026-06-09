@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import CrmEvent from '../models/CrmEvent.js';
 import Profile from '../models/Profile.js';
+import { isSuccessfulRegistrationProfile } from './crmUserVisibility.js';
 
 /** Name only for CRM bell — never expose email in API/UI. */
 export function crmEventDisplayName(event) {
@@ -47,8 +48,14 @@ export async function recordCrmNewUserEvent(user, options = {}) {
   if (!profile) {
     profile = await Profile.findOne({
       where: { userId: user.id },
-      attributes: ['firstName', 'lastName'],
+      attributes: ['firstName', 'lastName', 'age', 'gender', 'photos'],
     });
+  }
+
+  const userPlain = typeof user.toJSON === 'function' ? user.toJSON() : user;
+  const profilePlain = profile && typeof profile.toJSON === 'function' ? profile.toJSON() : profile;
+  if (!isSuccessfulRegistrationProfile({ ...userPlain, profile: profilePlain })) {
+    return null;
   }
 
   const name =

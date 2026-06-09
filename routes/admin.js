@@ -33,7 +33,7 @@ import {
   Block,
 } from '../models/index.js';
 import { protect, admin, superadmin, notCrmStreamerStaff } from '../middleware/auth.js';
-import { excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
+import { excludeDummyUsersEmailWhere, isDummyUserEmail } from '../utils/dummyUser.js';
 import { recordCrmNewUserEvent, sanitizeCrmEventForClient } from '../utils/crmEvents.js';
 import { parseLocalDateQuery } from '../utils/dateQuery.js';
 import CrmEvent from '../models/CrmEvent.js';
@@ -1712,24 +1712,62 @@ router.put('/profiles/:userId', protect, admin, async (req, res) => {
 // Admin: View all conversations (monitor users & streamers)
 // ============================================
 
+const CRM_DATING_USER_TYPES = ['regular', 'streamer', 'talent'];
+
+const isSystemContactMessageContent = (content) => {
+  const raw = String(content || '').toLowerCase().trim();
+  return raw.includes('added you to my contacts') || raw.includes('removed you from my contacts');
+};
+
+const isCrmCountableMessage = (message) => {
+  if (!message?.chatId) return false;
+  if (isSystemContactMessageContent(message.content)) return false;
+  if (String(message.content || '').trim()) return true;
+  if (message.mediaUrl) return true;
+  return false;
+};
+
+const isCrmEligibleConversationUser = (user) => {
+  if (!user || !CRM_DATING_USER_TYPES.includes(user.userType)) return false;
+  if (isDummyUserEmail(user.email)) return false;
+  if (user.registrationComplete === false) return false;
+  const profile = user.profile;
+  if (!profile || !String(profile.firstName || '').trim()) return false;
+  return true;
+};
+
 // @route   GET /api/admin/conversations
-// @desc    List all chats/conversations. Admin can view and track everything.
+// @desc    List chats with real messages between completed dating profiles only
 // @access  Admin only
 router.get('/conversations', protect, admin, async (req, res) => {
   try {
     const { type } = req.query; // optional: 'real', 'streamers', or omit for all
+
+    const candidateMessages = await Message.findAll({
+      attributes: ['chatId', 'content', 'mediaUrl'],
+      where: { isDeleted: false, chatId: { [Op.ne]: null } },
+    });
+    const chatIdsWithMessages = [
+      ...new Set(candidateMessages.filter(isCrmCountableMessage).map((m) => m.chatId)),
+    ];
+
+    if (chatIdsWithMessages.length === 0) {
+      return res.json({ conversations: [] });
+    }
+
     const chats = await Chat.findAll({
+      where: { id: { [Op.in]: chatIdsWithMessages } },
       include: [
         {
           model: User,
           as: 'user1Data',
-          attributes: ['id', 'email', 'userType'],
+          attributes: ['id', 'email', 'userType', 'registrationComplete'],
           include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }],
         },
         {
           model: User,
           as: 'user2Data',
-          attributes: ['id', 'email', 'userType'],
+          attributes: ['id', 'email', 'userType', 'registrationComplete'],
           include: [{ model: Profile, as: 'profile', attributes: ['firstName', 'lastName', 'photos'] }],
         },
       ],
@@ -1739,25 +1777,44 @@ router.get('/conversations', protect, admin, async (req, res) => {
       id: c.id,
       user1Id: c.user1Id,
       user2Id: c.user2Id,
-      user1: c.user1Data ? { id: c.user1Data.id, email: c.user1Data.email, userType: c.user1Data.userType, profile: c.user1Data.profile } : null,
-      user2: c.user2Data ? { id: c.user2Data.id, email: c.user2Data.email, userType: c.user2Data.userType, profile: c.user2Data.profile } : null,
+      user1: c.user1Data
+        ? {
+            id: c.user1Data.id,
+            email: c.user1Data.email,
+            userType: c.user1Data.userType,
+            registrationComplete: c.user1Data.registrationComplete,
+            profile: c.user1Data.profile,
+          }
+        : null,
+      user2: c.user2Data
+        ? {
+            id: c.user2Data.id,
+            email: c.user2Data.email,
+            userType: c.user2Data.userType,
+            registrationComplete: c.user2Data.registrationComplete,
+            profile: c.user2Data.profile,
+          }
+        : null,
       lastMessageAt: c.lastMessageAt,
       lastMessage: c.lastMessage,
       unreadCountUser1: c.unreadCountUser1,
       unreadCountUser2: c.unreadCountUser2,
     }));
+
+    list = list.filter(
+      (c) => isCrmEligibleConversationUser(c.user1) && isCrmEligibleConversationUser(c.user2)
+    );
+
     if (type === 'real') {
-      list = list.filter((c) => (c.user1?.userType === 'regular') && (c.user2?.userType === 'regular'));
+      list = list.filter((c) => c.user1?.userType === 'regular' && c.user2?.userType === 'regular');
     } else if (type === 'streamers') {
-      list = list.filter((c) =>
-        ['streamer', 'talent'].includes(c.user1?.userType) || ['streamer', 'talent'].includes(c.user2?.userType)
+      list = list.filter(
+        (c) =>
+          ['streamer', 'talent'].includes(c.user1?.userType) ||
+          ['streamer', 'talent'].includes(c.user2?.userType)
       );
     }
 
-    // Hide conversations where either side is superadmin (internal/system use only)
-    list = list.filter(
-      (c) => c.user1?.userType !== 'superadmin' && c.user2?.userType !== 'superadmin'
-    );
     res.json({ conversations: list });
   } catch (error) {
     console.error('Admin conversations error:', error);

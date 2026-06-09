@@ -538,9 +538,16 @@ router.get('/', protect, async (req, res) => {
         }
       }
       try {
-        chat = await findOrCreateChat(req.user.id, userId);
+        const [sortedUser1, sortedUser2] = [req.user.id, userId].sort();
+        chat = await Chat.findOne({
+          where: {
+            [Op.or]: [
+              { user1Id: sortedUser1, user2Id: sortedUser2 },
+              { user1Id: sortedUser2, user2Id: sortedUser1 },
+            ],
+          },
+        });
       } catch (chatError) {
-        // Chat table might not exist yet, continue without chat
         console.log('Chat table may not exist, continuing without chat:', chatError.message);
         chat = null;
       }
