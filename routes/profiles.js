@@ -516,8 +516,9 @@ router.get('/me', protect, async (req, res) => {
   try {
     let profile = await Profile.findOne({ where: { userId: req.user.id } });
 
+    // No profile yet (new signup / deleted profile) — let client open complete-profile wizard.
     if (!profile) {
-      return res.status(404).json({ message: 'Profile not found' });
+      return res.json(null);
     }
 
     res.json(profile);
