@@ -62,6 +62,26 @@ export async function findAppDatingUserByEmail(User, email) {
   return User.findOne({ where: appDatingEmailWhere(normalized) });
 }
 
+/** Same email can exist as member + streamer — return the row whose password matches. */
+export async function findDatingUserByEmailAndPassword(User, email, password) {
+  const normalized = normalizeEmail(email);
+  if (!normalized || password == null || password === '') return null;
+
+  const users = await User.findAll({
+    where: appDatingEmailWhere(normalized),
+    order: [
+      ['userType', 'ASC'],
+      ['createdAt', 'DESC'],
+    ],
+  });
+
+  for (const user of users) {
+    const isMatch = await user.matchPassword(password);
+    if (isMatch) return user;
+  }
+  return null;
+}
+
 export async function findStreamerByEmail(User, email) {
   const normalized = normalizeEmail(email);
   if (!normalized) return null;

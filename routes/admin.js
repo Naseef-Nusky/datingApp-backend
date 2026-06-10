@@ -695,7 +695,7 @@ const parseCrmInterests = (raw) => {
   }
 };
 
-const CRM_GENDERS = new Set(['male', 'female', 'other']);
+const CRM_GENDERS = new Set(['male', 'female']);
 const CRM_SEEKING = new Set(['male', 'female', 'both']);
 
 /** CRM multipart/JSON: trim, lowercase, first duplicate field, buffers; map common aliases. */
@@ -1690,7 +1690,12 @@ router.put('/profiles/:userId', protect, admin, async (req, res) => {
     if (firstName != null) updates.firstName = String(firstName).trim();
     if (lastName != null) updates.lastName = String(lastName || '').trim();
     if (age != null) updates.age = parseInt(age, 10) || 18;
-    if (gender != null && ['male', 'female', 'other'].includes(gender)) updates.gender = gender;
+    if (gender != null) {
+      if (!['male', 'female'].includes(gender)) {
+        return res.status(400).json({ message: 'Gender must be male or female' });
+      }
+      updates.gender = gender;
+    }
     if (bio != null) updates.bio = String(bio).trim().slice(0, 1000);
     if (location != null && typeof location === 'object') {
       updates.location = {

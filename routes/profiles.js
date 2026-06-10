@@ -516,29 +516,8 @@ router.get('/me', protect, async (req, res) => {
   try {
     let profile = await Profile.findOne({ where: { userId: req.user.id } });
 
-    // Legacy/login-link edge case: user exists but profile row is missing.
-    // Auto-create a minimal profile so onboarding can continue.
     if (!profile) {
-      const user = await User.findByPk(req.user.id, {
-        attributes: ['id', 'email', 'userType'],
-      });
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
-      const fallbackName = (user.email || 'user').split('@')[0] || 'User';
-      profile = await Profile.create({
-        userId: user.id,
-        firstName: fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1),
-        lastName: '',
-        age: 18,
-        gender: 'other',
-        bio: '',
-        location: {},
-        interests: [],
-        lifestyle: {},
-        preferences: {},
-        wishlist: [],
-      });
+      return res.status(404).json({ message: 'Profile not found' });
     }
 
     res.json(profile);
@@ -693,9 +672,15 @@ router.put('/me', protect, async (req, res) => {
     });
     let profile = await Profile.findOne({ where: { userId: req.user.id } });
 
-    // If profile is missing (legacy/incomplete account), create one so onboarding can continue.
+    if (updates.gender != null && !['male', 'female'].includes(updates.gender)) {
+      return res.status(400).json({ message: 'Gender must be male or female' });
+    }
+
+    // If profile is missing (legacy/incomplete account), create one during onboarding only.
     if (!profile) {
-      const safeGender = ['male', 'female', 'other'].includes(updates.gender) ? updates.gender : 'other';
+      if (!['male', 'female'].includes(updates.gender)) {
+        return res.status(400).json({ message: 'Gender must be male or female' });
+      }
       const safeAge = Number.isFinite(parseInt(updates.age, 10)) && parseInt(updates.age, 10) >= 18
         ? parseInt(updates.age, 10)
         : 18;
@@ -704,7 +689,7 @@ router.put('/me', protect, async (req, res) => {
         firstName: (updates.firstName || 'User').trim(),
         lastName: (updates.lastName || '').trim(),
         age: safeAge,
-        gender: safeGender,
+        gender: updates.gender,
         bio: updates.bio || '',
         location: updates.location || {},
         interests: Array.isArray(updates.interests) ? updates.interests : [],

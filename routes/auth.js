@@ -20,7 +20,9 @@ import { getFrontendUrl, getEmailFrontendUrl } from '../utils/frontendUrl.js';
 import {
   findCrmStaffByEmail,
   findAppDatingUserByEmail,
+  findDatingUserByEmailAndPassword,
   findRegularMemberByEmail,
+  findStreamerByEmail,
   isCrmSystemUser,
   normalizeEmail,
 } from '../utils/userEmailScope.js';
@@ -193,7 +195,7 @@ router.post(
     body('password').isLength({ min: 6 }),
     body('age').isInt({ min: 18 }),
     body('firstName').trim().notEmpty(),
-    body('gender').isIn(['male', 'female', 'other']),
+    body('gender').isIn(['male', 'female']),
   ],
   async (req, res) => {
     try {
@@ -428,8 +430,67 @@ router.post(
   }
 );
 
+// @route   POST /api/auth/streamer-login
+// @desc    Login for streamers/talent only
+// @access  Public
+router.post(
+  '/streamer-login',
+  [body('email').isEmail().normalizeEmail(), body('password').exists()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const normalizedEmail = normalizeEmail(req.body.email);
+      const user = await findStreamerByEmail(User, normalizedEmail);
+      if (!user) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      await ensureVerificationStateForUser(user);
+
+      const isMatch = await user.matchPassword(req.body.password);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      const profile = await Profile.findOne({ where: { userId: user.id } });
+      if (profile) {
+        const wasOnline = !!profile.isOnline;
+        profile.isOnline = true;
+        profile.lastSeen = new Date();
+        await profile.save();
+        if (!wasOnline) {
+          notifyContactsWhenUserComesOnline(user, profile);
+        }
+      }
+
+      const token = generateToken(user.id, user.userType);
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          userType: user.userType,
+          credits: user.credits,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+          verificationExpiresAt: user.verificationExpiresAt,
+        },
+      });
+    } catch (error) {
+      console.error('Streamer login error:', error);
+      return res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
 // @route   POST /api/auth/login
-// @desc    Login (any role – backward compatible). Prefer user-login / streamer-login / admin-login for role separation.
+// @desc    Login (any dating-app role). Same email may exist as member + streamer — password picks the account.
 // @access  Public
 router.post(
   '/login',
@@ -443,20 +504,16 @@ router.post(
 
       const { email, password } = req.body;
 
-      // Normalize email to lowercase for case-insensitive check
-      const normalizedEmail = email.toLowerCase().trim();
+      const normalizedEmail = normalizeEmail(email);
 
-      // Allow all dating-app users (regular + streamer + talent). CRM staff must use /admin-login.
-      const user = await findAppDatingUserByEmail(User, normalizedEmail);
+      const user = await findDatingUserByEmailAndPassword(User, normalizedEmail, password);
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
-      await ensureVerificationStateForUser(user);
-
-      const isMatch = await user.matchPassword(password);
-      if (!isMatch) {
-        return res.status(401).json({ message: 'Invalid credentials' });
+      if (isCrmSystemUser(user.userType)) {
+        return res.status(403).json({ message: frontendLoginForbiddenMessage });
       }
+      await ensureVerificationStateForUser(user);
 
       // Update last login
       user.lastLogin = new Date();
@@ -725,14 +782,7 @@ router.post(
           registrationComplete: false,
         });
         const firstName = normalizedEmail.split('@')[0] || 'User';
-        await Profile.create({
-          userId: user.id,
-          firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
-          lastName: '',
-          age: 18,
-          gender: 'other',
-        });
-        user.profile = { firstName: user.email.split('@')[0] };
+        user.profile = { firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase() };
       }
 
       const rawToken = crypto.randomBytes(32).toString('hex');
@@ -949,13 +999,6 @@ router.post(
           userType: 'regular',
           registrationComplete: false,
         });
-        await Profile.create({
-          userId: user.id,
-          firstName: displayFirst.charAt(0).toUpperCase() + displayFirst.slice(1).toLowerCase(),
-          lastName: family || '',
-          age: 18,
-          gender: 'other',
-        });
         user.profile = { firstName: displayFirst };
       } else {
         if (!user.appleSub) {
@@ -1132,13 +1175,6 @@ router.get('/google/callback', async (req, res) => {
         password: hashed,
         userType: 'regular',
         registrationComplete: false,
-      });
-      await Profile.create({
-        userId: user.id,
-        firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
-        lastName: '',
-        age: 18,
-        gender: 'other',
       });
       user.profile = { firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase() };
     }
