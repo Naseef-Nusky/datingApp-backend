@@ -38,7 +38,8 @@ function getViewerPhotoUrl(profile) {
 }
 
 // Rotating "visible online" state for browse/discovery views.
-// Keeps real online users online, and marks ~30% of others as online based on a time bucket.
+// Keeps real online users online; dummy profiles show ~80% as online (rotates every 15 min).
+const DUMMY_ROTATING_ONLINE_PERCENT = 80;
 function hashString(value) {
   const str = String(value || '');
   let hash = 0;
@@ -55,7 +56,7 @@ function getRotatingOnlineState(userId, realOnline, isDummyProfile) {
   // Rotate every 15 minutes.
   const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
   const score = hashString(`${userId}-${bucket}`) % 100;
-  return score < 30;
+  return score < DUMMY_ROTATING_ONLINE_PERCENT;
 }
 
 // Configure multer for memory storage (we'll upload directly to Spaces)
