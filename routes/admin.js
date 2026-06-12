@@ -198,7 +198,9 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null)
 
     const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
-    const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId);
+    const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId, {
+      isNewUser: true,
+    });
 
     if (!emailResult.success) {
       if (process.env.NODE_ENV !== 'production' && emailResult.error === 'SMTP not configured') {
@@ -1627,6 +1629,59 @@ router.post(
       res.json({ message: 'Photo uploaded successfully', photo: { url: photoUrl }, photos });
     } catch (error) {
       console.error('Admin profile photo upload error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   POST /api/admin/profiles/:userId/photos/add
+// @desc    Add gallery photo for a user (CRM registration wizard)
+// @access  Admin only
+router.post(
+  '/profiles/:userId/photos/add',
+  protect,
+  admin,
+  profilePhotoUpload.single('photo'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: 'No file uploaded' });
+      }
+      const userId = req.params.userId;
+      const profile = await Profile.findOne({ where: { userId } });
+      if (!profile) {
+        return res.status(404).json({ message: 'Profile not found' });
+      }
+      const image = await normalizeProfileImageBuffer(
+        req.file.buffer,
+        req.file.mimetype,
+        req.file.originalname
+      );
+      const photoUrl = await uploadToSpaces(
+        image.buffer,
+        image.mimetype,
+        'profiles/photos',
+        image.originalname
+      );
+      const isPublic =
+        req.body.isPublic !== undefined
+          ? req.body.isPublic === 'true' || req.body.isPublic === true
+          : true;
+      const photos = Array.isArray(profile.photos) ? [...profile.photos] : [];
+      photos.push({
+        url: photoUrl,
+        isPublic,
+        uploadedAt: new Date().toISOString(),
+      });
+      await profile.update({ photos });
+      await profile.reload();
+      res.json({
+        message: 'Gallery photo added successfully',
+        photo: { url: photoUrl },
+        photos: profile.photos,
+      });
+    } catch (error) {
+      console.error('Admin gallery photo upload error:', error);
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }

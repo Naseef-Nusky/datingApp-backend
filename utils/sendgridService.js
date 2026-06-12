@@ -1,5 +1,6 @@
 import sgMail from '@sendgrid/mail';
 import { getEmailBrandFooterHtml } from './emailFooter.js';
+import { getEmailFrontendUrl } from './frontendUrl.js';
 import sendgridPkg from '@sendgrid/client';
 import https from 'node:https';
 import path from 'path';
@@ -34,7 +35,6 @@ if (process.env.SENDGRID_API_KEY) {
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_USER || 'noreply@vantagedating.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Vantage Dating';
 const REPLY_TO = process.env.SENDGRID_REPLY_TO || process.env.SUPPORT_EMAIL || FROM_EMAIL;
-const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 // Logo URL for SendGrid emails (DigitalOcean Spaces); override with SENDGRID_LOGO_URL or PUBLIC_LOGO_URL if needed
 const LOGO_URL = process.env.SENDGRID_LOGO_URL || process.env.PUBLIC_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
 // Lock icon URL for attachment thumbnails in SendGrid emails (DigitalOcean Spaces)
@@ -89,6 +89,7 @@ if (!LOCK_ICON_BASE64) {
  * Base email template wrapper
  */
 const getBaseTemplate = (content, unsubscribeUrl = null) => {
+  const frontendUrl = getEmailFrontendUrl();
   // Use logo URL (DigitalOcean Spaces) so it loads reliably in email clients
   const logoSrc = LOGO_URL;
 
@@ -230,7 +231,7 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
       ${content}
     </div>
     <div class="footer">
-      ${getEmailBrandFooterHtml(FRONTEND_URL)}
+      ${getEmailBrandFooterHtml(frontendUrl)}
       ${unsubscribeUrl ? `<p style="margin-top: 12px;"><a href="${unsubscribeUrl}" style="color: #FF6B35; text-decoration: none;">Manage Email Preferences</a></p>` : ''}
       <p style="margin-top: 12px; font-size: 10px; color: #999;">
         This is an automated notification from Vantage Dating
@@ -246,11 +247,12 @@ const getBaseTemplate = (content, unsubscribeUrl = null) => {
  * Match Notification Template
  */
 export const getMatchNotificationTemplate = (userName, matchData) => {
+  const frontendUrl = getEmailFrontendUrl();
   const matchName = matchData.profile?.firstName || matchData.email?.split('@')[0] || 'Someone';
   const matchAge = matchData.profile?.age || '';
   const matchImage = matchData.profile?.profileImage || '';
   const matchBio = matchData.profile?.bio || 'Check out their profile!';
-  const profileUrl = `${FRONTEND_URL}/profile/${matchData.id}`;
+  const profileUrl = `${frontendUrl}/profile/${matchData.id}`;
 
   const content = `
     <h2 style="color: #333; margin-top: 0;">You have a new match! 🎉</h2>
@@ -268,18 +270,19 @@ export const getMatchNotificationTemplate = (userName, matchData) => {
     
     <p>Start a conversation and see where it leads!</p>
     <a href="${profileUrl}" class="button" style="color: white !important;">View Profile</a>
-    <a href="${FRONTEND_URL}/inbox" class="button" style="background: #131926; color: white !important;">Send Message</a>
+    <a href="${frontendUrl}/inbox" class="button" style="background: #131926; color: white !important;">Send Message</a>
   `;
 
-  return getBaseTemplate(content, `${FRONTEND_URL}/settings/email-preferences`);
+  return getBaseTemplate(content, `${frontendUrl}/settings/email-preferences`);
 };
 
 /**
  * Message Notification Template
- * @param {Object} opts - { attachments, creditCosts, senderId, frontendUrl } - frontendUrl overrides FRONTEND_URL so email links use correct origin/port
+ * @param {Object} opts - { attachments, creditCosts, senderId, frontendUrl } - frontendUrl overrides email base URL so links use correct origin/port
  */
 export const getMessageNotificationTemplate = (userName, senderData, messageContent, messageId, mediaUrl = null, opts = {}) => {
-  const baseUrl = (opts.frontendUrl || FRONTEND_URL || '').replace(/\/$/, '') || FRONTEND_URL;
+  const emailBase = getEmailFrontendUrl();
+  const baseUrl = (opts.frontendUrl || emailBase || '').replace(/\/$/, '') || emailBase;
   const senderName = senderData.profile?.firstName || senderData.email?.split('@')[0] || 'Someone';
   const senderAge = senderData.profile?.age || '';
   const senderBio = senderData.profile?.bio || '';
@@ -392,9 +395,10 @@ export const getMessageNotificationTemplate = (userName, senderData, messageCont
  * Profile View Notification Template
  */
 export const getProfileViewNotificationTemplate = (userName, viewerData) => {
+  const frontendUrl = getEmailFrontendUrl();
   const viewerName = viewerData.profile?.firstName || viewerData.email?.split('@')[0] || 'Someone';
   const viewerImage = viewerData.profile?.profileImage || '';
-  const profileUrl = `${FRONTEND_URL}/profile/${viewerData.id}`;
+  const profileUrl = `${frontendUrl}/profile/${viewerData.id}`;
 
   const content = `
     <h2 style="color: #333; margin-top: 0;">Someone viewed your profile 👀</h2>
@@ -414,13 +418,14 @@ export const getProfileViewNotificationTemplate = (userName, viewerData) => {
     <a href="${profileUrl}" class="button">View Profile</a>
   `;
 
-  return getBaseTemplate(content, `${FRONTEND_URL}/settings/email-preferences`);
+  return getBaseTemplate(content, `${frontendUrl}/settings/email-preferences`);
 };
 
 /**
  * Daily Digest Template
  */
 export const getDailyDigestTemplate = (userName, stats) => {
+  const frontendUrl = getEmailFrontendUrl();
   const { newMatches = 0, newMessages = 0, profileViews = 0, unreadMessages = 0 } = stats;
 
   const content = `
@@ -450,17 +455,18 @@ export const getDailyDigestTemplate = (userName, stats) => {
     ` : ''}
     
     <p>Don't miss out on potential connections!</p>
-    <a href="${FRONTEND_URL}/dashboard" class="button" style="color: white !important;">View Dashboard</a>
-    <a href="${FRONTEND_URL}/inbox" class="button" style="background: #131926; color: white !important;">Check Inbox</a>
+    <a href="${frontendUrl}/dashboard" class="button" style="color: white !important;">View Dashboard</a>
+    <a href="${frontendUrl}/inbox" class="button" style="background: #131926; color: white !important;">Check Inbox</a>
   `;
 
-  return getBaseTemplate(content, `${FRONTEND_URL}/settings/email-preferences`);
+  return getBaseTemplate(content, `${frontendUrl}/settings/email-preferences`);
 };
 
 /**
  * "X is now online!" notification email (like Vantage Dating – profile card, Chat Now, virtual gifts banner)
  */
 export const getOnlineNotificationTemplate = (onlineUserData) => {
+  const frontendUrl = getEmailFrontendUrl();
   const name = onlineUserData.profile?.firstName
     ? `${onlineUserData.profile.firstName}${onlineUserData.profile.lastName ? ' ' + onlineUserData.profile.lastName : ''}`
     : onlineUserData.email?.split('@')[0] || 'Someone';
@@ -468,7 +474,7 @@ export const getOnlineNotificationTemplate = (onlineUserData) => {
   const profileImage = (photos && Array.isArray(photos) && photos.length > 0)
     ? (photos[0]?.url || photos[0] || '')
     : onlineUserData.profile?.profileImage || '';
-  const chatUrl = `${FRONTEND_URL}/inbox`;
+  const chatUrl = `${frontendUrl}/inbox`;
 
   return `
 <!DOCTYPE html>
@@ -518,7 +524,7 @@ export const getOnlineNotificationTemplate = (onlineUserData) => {
       </div>
     </div>
     <div class="footer">
-      ${getEmailBrandFooterHtml(FRONTEND_URL)}
+      ${getEmailBrandFooterHtml(frontendUrl)}
     </div>
   </div>
 </body>
@@ -601,7 +607,7 @@ export const sendEmail = async (to, subject, htmlContent, textContent = null, tr
       (process.env.SENDGRID_CLICK_TRACKING === 'true' ||
         process.env.SENDGRID_CLICK_TRACKING === '1');
 
-    const preferencesUrl = `${FRONTEND_URL}/help`;
+    const preferencesUrl = `${getEmailFrontendUrl()}/help`;
     const deliverabilityHeaders = {
       'X-Entity-Ref-ID': trackingData.messageId || trackingData.userId || 'email-notification',
       ...(isTransactional

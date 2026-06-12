@@ -21,6 +21,7 @@ import { updateUserSpendAndVip } from '../utils/vip.js';
 import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 import { isDummyUserEmail } from '../utils/dummyUser.js';
 import { recordChatEngagement } from '../utils/engagementTracking.js';
+import { getEmailFrontendUrl, getFrontendUrl } from '../utils/frontendUrl.js';
 
 const router = express.Router();
 
@@ -2089,7 +2090,7 @@ router.get('/emails/:emailId', protect, async (req, res) => {
 router.post('/send-email', protect, upload.single('media'), async (req, res) => {
   try {
     const { receiverId, subject, content, mediaUrl, attachments: attachmentsRaw, frontendUrl: bodyFrontendUrl } = req.body;
-    const frontendUrl = bodyFrontendUrl || req.get('Origin') || process.env.FRONTEND_URL;
+    const frontendUrl = bodyFrontendUrl || getFrontendUrl(req) || getEmailFrontendUrl(req);
     let uploadedMediaUrl = mediaUrl || null;
     let attachments = null;
     if (attachmentsRaw) {

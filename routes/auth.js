@@ -759,8 +759,9 @@ router.post(
       const normalizedEmail = req.body.email.toLowerCase().trim();
       const linkDelivery = req.body.linkDelivery === 'ios-native' ? 'ios-native' : 'web';
       const frontendUrl =
-        linkDelivery === 'ios-native' ? getFrontendUrl(req) : getEmailFrontendUrl();
+        linkDelivery === 'ios-native' ? getFrontendUrl(req) : getEmailFrontendUrl(req);
 
+      let isNewUser = false;
       let user = await findRegularMemberByEmail(User, normalizedEmail);
       if (user) {
         const profile = await Profile.findOne({
@@ -773,6 +774,7 @@ router.post(
       if (!user) {
         if (!(await assertAllowRegistrations(res))) return;
 
+        isNewUser = true;
         const randomPassword = crypto.randomBytes(12).toString('hex');
         const hashed = await bcrypt.hash(randomPassword, 10);
         user = await User.create({
@@ -808,7 +810,9 @@ router.post(
       }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
-      const emailResult = await sendLoginLinkEmail(normalizedEmail, firstName, loginUrl, user.id);
+      const emailResult = await sendLoginLinkEmail(normalizedEmail, firstName, loginUrl, user.id, {
+        isNewUser,
+      });
 
       if (!emailResult.success) {
         // In development, allow testing without SMTP: log the link and still return success
@@ -1158,6 +1162,7 @@ router.get('/google/callback', async (req, res) => {
       return errorRedirect('Google account has no email');
     }
 
+    let isNewUser = false;
     let user = await findRegularMemberByEmail(User, email);
     if (user) {
       const profile = await Profile.findOne({
@@ -1168,6 +1173,7 @@ router.get('/google/callback', async (req, res) => {
     }
 
     if (!user) {
+      isNewUser = true;
       const randomPassword = crypto.randomBytes(12).toString('hex');
       const hashed = await bcrypt.hash(randomPassword, 10);
       user = await User.create({
@@ -1189,7 +1195,9 @@ router.get('/google/callback', async (req, res) => {
 
     const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
-    const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id);
+    const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id, {
+      isNewUser,
+    });
 
     if (!emailResult.success && process.env.NODE_ENV !== 'production') {
       console.log('\n📧 [DEV] Google sign-in: SMTP not configured — use this login link:');

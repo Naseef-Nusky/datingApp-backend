@@ -1,4 +1,4 @@
-const LOCAL_FRONTEND_DEFAULT = 'http://localhost:5173';
+const LOCAL_FRONTEND_DEFAULT = 'http://localhost:3000';
 
 const normalizeUrl = (url) => String(url || '').replace(/\/$/, '');
 
@@ -38,7 +38,7 @@ const originFromRequest = (req) => {
 
 /**
  * Frontend base URL for email links, OAuth redirects, etc.
- * - Local dev (BACKEND_URL=localhost or NODE_ENV=development): LOCAL_FRONTEND_URL or http://localhost:5173
+ * - Local dev (BACKEND_URL=localhost or NODE_ENV=development): LOCAL_FRONTEND_URL or http://localhost:3000
  * - Production: FRONTEND_URL (e.g. https://vantagedating.com)
  * - When req Origin is localhost, prefer that (correct Vite port).
  */
@@ -53,16 +53,23 @@ export const getFrontendUrl = (req = null) => {
   return normalizeUrl(process.env.FRONTEND_URL || 'https://vantagedating.com');
 };
 
-/** Production site URL for links inside outbound email (never localhost). */
-export const getEmailFrontendUrl = () => {
+/**
+ * Base URL for links inside outbound email.
+ * Local dev (NODE_ENV=development or BACKEND_URL=localhost) → LOCAL_FRONTEND_URL.
+ * Production → FRONTEND_URL / EMAIL_FRONTEND_URL.
+ */
+export const getEmailFrontendUrl = (req = null) => {
+  if (isLocalDevEnvironment()) {
+    return getFrontendUrl(req);
+  }
   if (process.env.EMAIL_FORCE_LOCAL_LINKS === 'true' || process.env.EMAIL_FORCE_LOCAL_LINKS === '1') {
-    return getFrontendUrl();
+    return getFrontendUrl(req);
   }
   const explicit = normalizeUrl(process.env.EMAIL_FRONTEND_URL || '');
   if (explicit && !isLocalHostUrl(explicit)) return explicit;
   const production = normalizeUrl(process.env.FRONTEND_URL || '');
   if (production && !isLocalHostUrl(production)) return production;
-  return getFrontendUrl();
+  return getFrontendUrl(req);
 };
 
 export default getFrontendUrl;

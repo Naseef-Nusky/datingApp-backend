@@ -1,6 +1,11 @@
 import nodemailer from 'nodemailer';
 import { getEmailFrontendUrl } from './frontendUrl.js';
-import { getEmailBrandFooterHtml, getEmailBrandFooterText } from './emailFooter.js';
+import {
+  getEmailBrandFooterHtml,
+  getEmailBrandFooterText,
+  getLoginEmailFooterHtml,
+  getLoginEmailFooterText,
+} from './emailFooter.js';
 
 // Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
 const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || 'https://nexdatingmedia.lon1.digitaloceanspaces.com/Logo/logonew.png';
@@ -141,7 +146,7 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
           ` : ''}
           <p>Log in to your account to read and reply.</p>
           <div style="text-align: center;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/inbox" class="button" style="text-decoration: none;">View Message</a>
+            <a href="${getEmailFrontendUrl()}/inbox" class="button" style="text-decoration: none;">View Message</a>
           </div>
         </div>
         <div class="footer">
@@ -162,14 +167,21 @@ export const sendEmailNotification = async (recipient, sender, messageContent, m
  * @param {string} firstName - Display name (e.g. from email or profile)
  * @param {string} loginUrl - Full URL to click to log in
  * @param {string} userId - User ID for footer
+ * @param {{ isNewUser?: boolean }} options - isNewUser true → sign-up copy; false → sign-in copy
  */
-export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') => {
+export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '', options = {}) => {
   const brandName =
     (process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating')
       .replace(/\s+Team$/i, '')
       .trim() || 'Vantage Dating';
-  const frontendUrl = getEmailFrontendUrl();
   const logoUrl = EMAIL_LOGO_URL;
+  const isNewUser = options.isNewUser === true;
+  const subject = isNewUser ? `Welcome to ${brandName}` : `Sign in to ${brandName}`;
+  const intro = isNewUser
+    ? `Welcome to ${brandName}. Tap below to sign up.`
+    : `Tap below to sign in to your ${brandName} account.`;
+  const buttonLabel = isNewUser ? 'Sign up' : 'Sign in';
+  const spamAction = buttonLabel;
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -181,10 +193,7 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
     .container { max-width: 600px; margin: 0 auto; padding: 20px; }
     .header { border-bottom: 3px solid #E97672; padding-bottom: 15px; margin-bottom: 20px; }
     .logo { max-width: 180px; height: auto; }
-    .login-link { color: #5A2D8A; text-decoration: none; }
     .button { display: inline-block; background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672); color: #fff !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
-    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666; }
-    .footer a { color: #5A2D8A; }
   </style>
 </head>
 <body>
@@ -193,15 +202,18 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
       <img src="${logoUrl}" alt="${brandName}" class="logo" />
     </div>
     <p style="font-size: 18px; font-weight: bold;">Hello, ${firstName}!</p>
-    <p>You requested a sign-in link for your ${brandName} account.</p>
-    <p>Please follow your <a href="${loginUrl}" class="login-link">link to sign in</a>.</p>
+    <p>${intro}</p>
     <p style="text-align: center;">
-      <a href="${loginUrl}" class="button">Sign in</a>
+      <a href="${loginUrl}" class="button">${buttonLabel}</a>
     </p>
-    <p style="font-size: 12px; color: #666;">If you didn't request this, you can ignore this email.</p>
-    <div class="footer">
-      ${getEmailBrandFooterHtml(frontendUrl)}
-    </div>
+    <p style="font-size: 13px; color: #666; margin-top: 20px;">
+      This link stops working if you request a new one.
+    </p>
+    <p style="font-size: 13px; color: #4b5563; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; margin: 16px 0 0 0; line-height: 1.5;">
+      In <strong>Spam</strong> or <strong>Junk</strong>? Move to <strong>Inbox</strong>, then tap <strong>${spamAction}</strong>.
+    </p>
+    <p style="font-size: 12px; color: #666; margin-top: 16px;">Didn't request this? Ignore this email.</p>
+    ${getLoginEmailFooterHtml()}
   </div>
 </body>
 </html>
@@ -209,14 +221,21 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '') =
 
   const textContent = [
     `Hello, ${firstName || 'there'},`,
-    `Sign in to ${brandName}: ${loginUrl}`,
-    `If you did not request this, ignore this email.`,
     '',
-    getEmailBrandFooterText(frontendUrl),
+    `${intro}`,
+    loginUrl,
+    '',
+    'This link stops working if you request a new one.',
+    '',
+    'In Spam or Junk? Move to Inbox, then open the link.',
+    '',
+    "Didn't request this? Ignore this email.",
+    '',
+    getLoginEmailFooterText(),
   ].join('\n');
 
-  return await sendEmail(to, `Your ${brandName} sign-in link`, htmlContent, textContent, [], {
-    trackingData: { notificationType: 'login_link', userId },
+  return await sendEmail(to, subject, htmlContent, textContent, [], {
+    trackingData: { notificationType: 'login_link', userId, isNewUser },
   });
 };
 

@@ -29,3 +29,20 @@ export const getEmailBrandFooterText = (siteUrl = null) => {
   const support = supportEmail();
   return `${brand}\n${url}\nSupport: ${support}`;
 };
+
+/** Minimal footer for login emails — no extra links (one CTA in the body is enough) */
+export const getLoginEmailFooterHtml = () => {
+  const brand = brandName();
+  const support = supportEmail();
+  return `
+      <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 12px; color: #666; line-height: 1.6;">
+        <p style="margin: 0 0 4px 0; font-weight: 600; color: #374151;">${brand}</p>
+        <p style="margin: 0;">${support}</p>
+      </div>`;
+};
+
+export const getLoginEmailFooterText = () => {
+  const brand = brandName();
+  const support = supportEmail();
+  return `${brand}\n${support}`;
+};
