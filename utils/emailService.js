@@ -5,6 +5,7 @@ import {
   getEmailBrandFooterText,
   getLoginEmailFooterHtml,
   getLoginEmailFooterText,
+  renderBrandEmailButton,
 } from './emailFooter.js';
 
 // Logo URL for email templates (hosted on CDN so it loads reliably in email clients)
@@ -193,7 +194,6 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '', o
     .container { max-width: 600px; margin: 0 auto; padding: 20px; }
     .header { border-bottom: 3px solid #E97672; padding-bottom: 15px; margin-bottom: 20px; }
     .logo { max-width: 180px; height: auto; }
-    .button { display: inline-block; background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672); color: #fff !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
   </style>
 </head>
 <body>
@@ -203,9 +203,7 @@ export const sendLoginLinkEmail = async (to, firstName, loginUrl, userId = '', o
     </div>
     <p style="font-size: 18px; font-weight: bold;">Hello, ${firstName}!</p>
     <p>${intro}</p>
-    <p style="text-align: center;">
-      <a href="${loginUrl}" class="button">${buttonLabel}</a>
-    </p>
+    ${renderBrandEmailButton(loginUrl, buttonLabel)}
     <p style="font-size: 13px; color: #666; margin-top: 20px;">
       This link stops working if you request a new one.
     </p>
