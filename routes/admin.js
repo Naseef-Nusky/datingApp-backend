@@ -33,7 +33,11 @@ import {
   Block,
 } from '../models/index.js';
 import { protect, admin, superadmin, notCrmStreamerStaff } from '../middleware/auth.js';
-import { excludeDummyUsersEmailWhere, isDummyUserEmail } from '../utils/dummyUser.js';
+import {
+  excludeDummyUsersEmailWhere,
+  isDummyUserEmail,
+  onlyDummyUsersEmailWhere,
+} from '../utils/dummyUser.js';
 import { recordCrmNewUserEvent, sanitizeCrmEventForClient } from '../utils/crmEvents.js';
 import { parseLocalDateQuery } from '../utils/dateQuery.js';
 import CrmEvent from '../models/CrmEvent.js';
@@ -559,23 +563,31 @@ router.get('/users', protect, admin, async (req, res) => {
       createdTo,
       newUsers,
       excludeDummy,
+      dummyOnly,
       organicOnly,
       registrationComplete,
     } = req.query;
 
-    const andParts = [];
-    andParts.push({
-      userType: type === 'streamers'
-        ? { [Op.in]: ['streamer', 'talent'] }
-        : type === 'real'
-          ? 'regular'
-          : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'] },
-    });
+    const isDummyOnly = dummyOnly === '1' || dummyOnly === 'true';
 
-    const skipDummy =
-      excludeDummy !== '0' && excludeDummy !== 'false' && (type === 'real' || type === 'all' || !type);
-    if (skipDummy) {
-      andParts.push(excludeDummyUsersEmailWhere());
+    const andParts = [];
+    if (isDummyOnly) {
+      andParts.push({ userType: 'regular' });
+      andParts.push(onlyDummyUsersEmailWhere());
+    } else {
+      andParts.push({
+        userType: type === 'streamers'
+          ? { [Op.in]: ['streamer', 'talent'] }
+          : type === 'real'
+            ? 'regular'
+            : { [Op.notIn]: ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'] },
+      });
+
+      const skipDummy =
+        excludeDummy !== '0' && excludeDummy !== 'false' && (type === 'real' || type === 'all' || !type);
+      if (skipDummy) {
+        andParts.push(excludeDummyUsersEmailWhere());
+      }
     }
 
     if (organicOnly === '1' || organicOnly === 'true') {
@@ -584,9 +596,10 @@ router.get('/users', protect, admin, async (req, res) => {
 
     // Real users (CRM): hide login-link-only accounts until onboarding is finished
     if (
-      type === 'real' ||
-      registrationComplete === '1' ||
-      registrationComplete === 'true'
+      !isDummyOnly &&
+      (type === 'real' ||
+        registrationComplete === '1' ||
+        registrationComplete === 'true')
     ) {
       andParts.push({ registrationComplete: true });
     }

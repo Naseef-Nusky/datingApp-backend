@@ -25,3 +25,13 @@ export function excludeDummyUsersEmailWhere() {
     ],
   };
 }
+
+/** Sequelize fragment: only seeded dummy profiles (e.g. dummy15_kendra@example.com). */
+export function onlyDummyUsersEmailWhere() {
+  return {
+    [Op.and]: [
+      { email: { [Op.iLike]: 'dummy%' } },
+      { email: { [Op.iLike]: '%@example.com' } },
+    ],
+  };
+}
