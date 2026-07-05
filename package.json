@@ -15,6 +15,9 @@
     "update-dummy-locations": "node scripts/updateDummyProfileLocations.js",
     "update-dummy-locations-dry": "node scripts/updateDummyProfileLocations.js --dry-run",
     "create-admin": "node scripts/createAdmin.js",
+    "generate-aasa": "node scripts/generateAasa.mjs",
+    "test-engagement-email": "node scripts/sendTestEngagementEmail.mjs",
+    "test-stripe-mobile": "node scripts/testStripeMobile.mjs",
     "update-superadmin": "node scripts/updateToSuperAdmin.js",
     "import-dummy-profiles": "node scripts/importDummyProfilesFromCsv.js",
     "generate-dummy-man-csv": "node scripts/generateDummyManProfilesCsv.js",
@@ -28,7 +31,10 @@
     "update-opposite-sex-age": "node scripts/updateProfileAgePreferences.js --opposite-sex",
     "update-opposite-sex-age-dry": "node scripts/updateProfileAgePreferences.js --opposite-sex --dry-run",
     "set-seeking-by-gender": "node scripts/setSeekingByGender.js",
-    "set-seeking-by-gender-dry": "node scripts/setSeekingByGender.js --dry-run"
+    "set-seeking-by-gender-dry": "node scripts/setSeekingByGender.js --dry-run",
+    "db:allow-my-ip": "node scripts/sync-do-db-trusted-ip.mjs",
+    "db:local": "docker compose up -d postgres",
+    "db:local:stop": "docker compose stop postgres"
   },
   "keywords": [
     "dating",

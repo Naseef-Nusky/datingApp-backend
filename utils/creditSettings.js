@@ -110,6 +110,17 @@ export const getEmailSendCost = async () => {
   }
 };
 
+export const getChatMessageCost = async () => {
+  try {
+    const settings = await getCreditSettings();
+    const cost = parseInt(settings.chatMessage, 10);
+    return Number.isFinite(cost) && cost > 0 ? cost : 0;
+  } catch (error) {
+    console.error('Error getting chat message credit cost:', error.message);
+    return 0;
+  }
+};
+
 export const getMingleCost = async () => {
   try {
     const settings = await getCreditSettings();

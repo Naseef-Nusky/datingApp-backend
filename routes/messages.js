@@ -17,6 +17,7 @@ import { sendEmail as sendSmtpEmail, sendAddedToContactsEmail } from '../utils/e
 import { sendEmail as sendGridEmail, getMessageNotificationTemplate } from '../utils/sendgridService.js';
 import { notifyNewMessage } from '../utils/notificationService.js';
 import { getCreditSettings, getEmailSendCost, getMingleCost } from '../utils/creditSettings.js';
+import { checkCanSendChat, checkCanSendEmail } from '../utils/callAccess.js';
 import { updateUserSpendAndVip } from '../utils/vip.js';
 import { checkFreeToFreeRestriction } from '../utils/userCompliance.js';
 import { isDummyUserEmail } from '../utils/dummyUser.js';
@@ -31,7 +32,16 @@ const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
+    const mime = String(file.mimetype || '').toLowerCase();
+    const ext = (file.originalname || '').toLowerCase().match(/\.[^.]+$/)?.[0] || '';
+    const audioExts = ['.m4a', '.mp4', '.webm', '.mp3', '.aac', '.wav', '.ogg', '.caf'];
+
+    if (mime.startsWith('image/') || mime.startsWith('video/') || mime.startsWith('audio/')) {
+      cb(null, true);
+    } else if (
+      (mime === 'application/octet-stream' || mime === '') &&
+      audioExts.includes(ext)
+    ) {
       cb(null, true);
     } else {
       cb(new Error('Only image, video, and audio files are allowed'), false);
@@ -282,7 +292,19 @@ router.post('/', protect, async (req, res) => {
     const isStreamerSender = req.user.userType === 'streamer' || req.user.userType === 'talent';
 
     if (isChargeableChat && !isStreamerSender) {
-      const costPerMessage = await getChatMessageCost();
+      const access = await checkCanSendChat(req.user.id);
+      if (!access.allowed) {
+        const status = access.code === 'SUBSCRIPTION_REQUIRED' ? 403 : 400;
+        return res.status(status).json({
+          message: access.message,
+          code: access.code,
+          required: access.required ?? access.costPerMessage,
+          balance: access.balance,
+          costPerMessage: access.costPerMessage,
+        });
+      }
+
+      const costPerMessage = access.costPerMessage ?? (await getChatMessageCost());
       if (costPerMessage > 0) {
         const user = await User.findByPk(req.user.id, { attributes: ['id', 'credits'] });
         if (!user) {
@@ -293,6 +315,7 @@ router.post('/', protect, async (req, res) => {
         if (currentCredits < costPerMessage) {
           return res.status(400).json({
             message: 'Insufficient credits',
+            code: 'INSUFFICIENT_CREDITS',
             required: costPerMessage,
             balance: currentCredits,
           });
@@ -476,7 +499,16 @@ router.post('/', protect, async (req, res) => {
       ],
     });
 
-    res.status(201).json(messageWithDetails);
+    const responsePayload = messageWithDetails?.toJSON
+      ? messageWithDetails.toJSON()
+      : { ...(messageWithDetails.get ? messageWithDetails.get({ plain: true }) : messageWithDetails) };
+    if (creditsUsed > 0) {
+      const senderAfter = await User.findByPk(req.user.id, { attributes: ['credits'] });
+      responsePayload.creditsUsed = creditsUsed;
+      responsePayload.senderCreditsBalance = senderAfter?.credits ?? null;
+    }
+
+    res.status(201).json(responsePayload);
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -2180,7 +2212,19 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
       req.user.userType === 'streamer' || req.user.userType === 'talent';
 
     if (!isStreamerSender) {
-      const emailCost = await getEmailSendCost();
+      const access = await checkCanSendEmail(req.user.id);
+      if (!access.allowed) {
+        const status = access.code === 'SUBSCRIPTION_REQUIRED' ? 403 : 400;
+        return res.status(status).json({
+          message: access.message,
+          code: access.code,
+          required: access.required ?? access.emailCost,
+          balance: access.balance,
+          emailCost: access.emailCost,
+        });
+      }
+
+      const emailCost = access.emailCost ?? (await getEmailSendCost());
       if (emailCost > 0) {
         const senderForCredits = await User.findByPk(req.user.id, {
           attributes: ['id', 'credits'],
@@ -2192,6 +2236,7 @@ router.post('/send-email', protect, upload.single('media'), async (req, res) => 
         if (balance < emailCost) {
           return res.status(400).json({
             message: 'Insufficient credits',
+            code: 'INSUFFICIENT_CREDITS',
             required: emailCost,
             balance,
           });
@@ -2493,6 +2538,7 @@ router.post('/emails/:emailId/unlock-attachment', protect, async (req, res) => {
     const balance = user.credits ?? 0;
     if (balance < cost) {
       return res.status(400).json({
+        code: 'INSUFFICIENT_CREDITS',
         message: 'Insufficient credits',
         required: cost,
         balance,
@@ -2510,7 +2556,14 @@ router.post('/emails/:emailId/unlock-attachment', protect, async (req, res) => {
     });
     await updateUserSpendAndVip(req.user.id, cost);
 
-    res.json({ url: attachment.url, type: attachment.type, alreadyUnlocked: false, creditsUsed: cost });
+    const senderAfter = await User.findByPk(req.user.id, { attributes: ['credits'] });
+    res.json({
+      url: attachment.url,
+      type: attachment.type,
+      alreadyUnlocked: false,
+      creditsUsed: cost,
+      senderCreditsBalance: senderAfter?.credits ?? null,
+    });
   } catch (error) {
     console.error('Unlock attachment error:', error);
     res.status(500).json({ message: 'Server error' });

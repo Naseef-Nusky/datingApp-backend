@@ -15,6 +15,7 @@ import Story from '../models/Story.js';
 import EngagementSession from '../models/EngagementSession.js';
 import CrmEvent from '../models/CrmEvent.js';
 import NewUserStreamerEmail from '../models/NewUserStreamerEmail.js';
+import Compatibility from '../models/Compatibility.js';
 import { Op } from 'sequelize';
 import { deleteFromSpaces } from '../utils/spacesUpload.js';
 
@@ -108,6 +109,10 @@ await sequelize.transaction(async (t) => {
   await CrmEvent.destroy({ where: { userId }, ...opts });
   await NewUserStreamerEmail.destroy({
     where: { [Op.or]: [{ newUserId: userId }, { streamerUserId: userId }] },
+    ...opts,
+  });
+  await Compatibility.destroy({
+    where: { [Op.or]: [{ userLowId: userId }, { userHighId: userId }] },
     ...opts,
   });
   await Profile.destroy({ where: { userId }, ...opts });

@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { getEmailFrontendUrl } from './frontendUrl.js';
+import { getMobileAppLinks } from './mobileAppUser.js';
 import {
   getEmailBrandFooterHtml,
   getEmailBrandFooterText,
@@ -733,6 +734,121 @@ export const sendStreamerReadyToChatEmail = async (
   return await sendEmail(to, subject, htmlContent, textContent, [], mailOpts);
 };
 
+const renderCompatibleMatchRow = (match, frontendUrl) => {
+  const name = escapeHtml(match.firstName || 'Someone');
+  const score = escapeHtml(String(match.score ?? ''));
+  const photoUrl = escapeHtml(match.photoUrl || `${frontendUrl}/profile.png`);
+  const sharedRaw = (match.sharedInterests || []).slice(0, 3).join(', ');
+  const sharedLine = sharedRaw
+    ? `Shared interests: ${escapeHtml(sharedRaw)}`
+    : match.strengths?.[0]
+      ? escapeHtml(String(match.strengths[0]))
+      : 'Great compatibility based on your profiles';
+  const profileLinks = getMobileAppLinks(`/profile/${match.userId}`);
+  const profileUrl = escapeHtml(profileLinks.webLink || profileLinks.appLink);
+
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 0 16px;border:1px solid #f0d4e8;border-radius:14px;background:#fff7fb;overflow:hidden;">
+      <tr>
+        <td width="96" valign="top" style="padding:14px 0 14px 14px;">
+          <img src="${photoUrl}" alt="${name}" width="80" height="80" style="width:80px;height:80px;border-radius:12px;object-fit:cover;border:3px solid #E97672;display:block;" />
+        </td>
+        <td valign="middle" style="padding:14px 16px 14px 8px;font-family:Arial,Helvetica,sans-serif;">
+          <p style="margin:0 0 6px;font-size:17px;font-weight:700;color:#B5458F;line-height:1.3;">
+            ❤️ ${name} — ${score}% Compatible
+          </p>
+          <p style="margin:0;font-size:14px;color:#555;line-height:1.5;">${sharedLine}</p>
+          <p style="margin:10px 0 0;">
+            <a href="${profileUrl}" style="color:#B5458F;font-weight:700;text-decoration:none;font-size:13px;">View profile</a>
+          </p>
+        </td>
+      </tr>
+    </table>`;
+};
+
+/**
+ * Mobile-only: top compatible matches email with profile photos.
+ */
+export const sendMobileCompatibleMatchesEmail = async (to, recipientName, matches = []) => {
+  const appName = process.env.SENDGRID_FROM_NAME || process.env.SMTP_FROM_NAME || 'Vantage Dating';
+  const teamFromName = `${appName} Team`;
+  const logoUrl = EMAIL_LOGO_URL;
+  const frontendUrl = getEmailFrontendUrl();
+  const safeRecipient = escapeHtml(recipientName || 'there');
+  const { appLink, webLink, primaryLink } = getMobileAppLinks('/dashboard');
+  const viewMatchesUrl = escapeHtml(webLink || primaryLink);
+  const subject = 'Your top compatible matches are waiting ❤️';
+
+  const matchRows = (matches || []).map((m) => renderCompatibleMatchRow(m, frontendUrl)).join('');
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; background: #f5f5f5; margin: 0; padding: 0; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; background: #fff; }
+    .header { padding: 20px 24px 14px; border-bottom: 3px solid #B5458F; text-align: center; }
+    .logo { max-width: 140px; height: auto; display: inline-block; }
+    .content { padding: 24px; }
+    p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; }
+    .cta-main {
+      display: inline-block;
+      background: linear-gradient(to right, #5A2D8A, #B5458F, #E97672);
+      color: #ffffff !important;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 14px 32px;
+      border-radius: 8px;
+    }
+    .browse-wrap { text-align: center; margin-top: 24px; }
+    .footer { padding: 20px 24px 28px; text-align: center; font-size: 13px; color: #888; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${logoUrl}" alt="${escapeHtml(appName)}" class="logo" />
+    </div>
+    <div class="content">
+      <p>Hi ${safeRecipient},</p>
+      <p>We found some highly compatible profiles for you.</p>
+      ${matchRows}
+      <p>Open Vantage to view their profiles and start a conversation.</p>
+      <div class="browse-wrap">
+        <a class="cta-main" href="${viewMatchesUrl}">View Matches</a>
+      </div>
+    </div>
+    <div class="footer">${getEmailBrandFooterHtml(frontendUrl)}</div>
+  </div>
+</body>
+</html>`;
+
+  const textLines = (matches || []).map((m) => {
+    const shared = (m.sharedInterests || []).slice(0, 3).join(', ');
+    return `❤️ ${m.firstName} — ${m.score}% Compatible${shared ? `\nShared interests: ${shared}` : ''}`;
+  });
+
+  const textContent = [
+    `Hi ${recipientName || 'there'},`,
+    'We found some highly compatible profiles for you.',
+    '',
+    ...textLines,
+    '',
+    `View matches: ${webLink || primaryLink}`,
+    '',
+    getEmailBrandFooterText(frontendUrl),
+  ].join('\n');
+
+  return await sendEmail(to, subject, htmlContent, textContent, [], {
+    fromName: teamFromName,
+    trackingData: { notificationType: 'mobile_compatible_matches' },
+  });
+};
+
 export default {
   sendEmail,
   sendEmailNotification,
@@ -742,4 +858,5 @@ export default {
   sendProfileViewNotificationEmail,
   sendProfileViewsBatchEmail,
   sendAddedToContactsEmail,
+  sendMobileCompatibleMatchesEmail,
 };

@@ -51,6 +51,9 @@ import wishlistRoutes from './routes/wishlist.js';
 import settingsRoutes from './routes/settings.js';
 import vipRoutes from './routes/vip.js';
 import translateRoutes from './routes/translate.js';
+import compatibilityRoutes from './routes/compatibility.js';
+import createMobileRouter from './routes/mobile/index.js';
+import wellKnownRoutes from './routes/wellKnown.js';
 
 dotenv.config();
 
@@ -65,6 +68,7 @@ const PRODUCTION_ORIGINS = [
 ];
 const DEV_ORIGINS = [
   'http://localhost:3000',
+  'http://localhost:3001', // datingApp-mobile Vite dev server
   'http://localhost:5173',
   'http://localhost:5175', // landing-page Vite dev server
 ];
@@ -98,6 +102,10 @@ const CAPACITOR_NATIVE_ORIGINS = [
 
 const app = express();
 const httpServer = createServer(app);
+
+// Universal Links — iOS/Android (proxy from app web domain in production nginx)
+app.use('/.well-known', wellKnownRoutes);
+
 const io = new SocketServer(httpServer, {
   cors: {
     origin: [...new Set([...allowedOrigins, ...CAPACITOR_NATIVE_ORIGINS])],
@@ -249,6 +257,10 @@ app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/vip', vipRoutes);
 app.use('/api/translate', translateRoutes);
+app.use('/api/compatibility', compatibilityRoutes);
+
+// Mobile app API (Capacitor) — same handlers, separate /api/mobile/* prefix
+app.use('/api/mobile', createMobileRouter(io));
 
 // Socket.IO for real-time features (video/voice calls, live messaging)
 // Store user IDs with socket connections
@@ -797,6 +809,16 @@ io.on('connection', (socket) => {
                   relatedId: callRequest.id,
                 });
                 await updateUserSpendAndVip(caller.id, totalCost);
+                const callerAfter = await User.findByPk(callRequest.callerId, {
+                  attributes: ['credits'],
+                });
+                const newBalance = callerAfter?.credits ?? null;
+                if (newBalance != null) {
+                  io.to(`user-${callRequest.callerId}`).emit('credits-updated', {
+                    credits: newBalance,
+                    creditsUsed: totalCost,
+                  });
+                }
                 console.log(
                   `💳 [SERVER] Deducted ${totalCost} credits from caller ${caller.id} for ${callRequest.callType} call (${billableMinutes} min)`
                 );
@@ -902,6 +924,15 @@ const startServer = async () => {
       startNewUserStreamerEmailScheduler();
     } catch (error) {
       console.warn('⚠️ Could not start new-user streamer email scheduler:', error.message);
+    }
+
+    try {
+      const { startMobileCompatibilityEmailScheduler } = await import(
+        './utils/mobileCompatibilityEmailScheduler.js'
+      );
+      startMobileCompatibilityEmailScheduler();
+    } catch (error) {
+      console.warn('⚠️ Could not start mobile compatibility email scheduler:', error.message);
     }
 
     // Close idle chat engagement sessions every 2 minutes

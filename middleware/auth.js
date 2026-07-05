@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { User } from '../models/index.js';
+import { touchMobileAppUser } from '../utils/mobileAppUser.js';
 //authentication middleware
 export const protect = async (req, res, next) => {
   let token;
@@ -17,6 +18,10 @@ export const protect = async (req, res, next) => {
       
       if (!req.user || !req.user.isActive) {
         return res.status(401).json({ message: 'User not authorized' });
+      }
+
+      if (req.clientPlatform === 'mobile') {
+        touchMobileAppUser(req.user.id).catch(() => {});
       }
       
       next();

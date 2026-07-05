@@ -19,6 +19,7 @@ import {
   normalizeProfileImageBuffer,
 } from '../utils/imageUpload.js';
 import { isDummyUserEmail, excludeDummyUsersEmailWhere } from '../utils/dummyUser.js';
+import { normalizeZodiacKey, resolveZodiacSign, enrichLifestyle } from '../utils/zodiac.js';
 
 const router = express.Router();
 
@@ -305,15 +306,6 @@ router.get('/', protect, async (req, res) => {
       return matchesNormalized(filter, val);
     };
 
-    const normalizeZodiacKey = (value) => {
-      const base = normalizeText(value || '').replace(/[^a-z]/g, '');
-      const aliases = {
-        arian: 'aries',
-        capricon: 'capricorn',
-      };
-      return aliases[base] || base;
-    };
-
     // Zodiac compatibility map (very simple version)
     const zodiacCompatibility = {
       aries: ['leo', 'sagittarius', 'gemini', 'aquarius'],
@@ -330,7 +322,7 @@ router.get('/', protect, async (req, res) => {
       pisces: ['cancer', 'scorpio', 'taurus', 'capricorn'],
     };
 
-    const currentUserZodiac = normalizeZodiacKey(currentUser?.lifestyle?.zodiac || '');
+    const currentUserZodiac = normalizeZodiacKey(resolveZodiacSign(currentUser?.lifestyle) || '');
     const compatibleSigns = compatibleZodiacOnly === 'true' && currentUserZodiac
       ? (zodiacCompatibility[currentUserZodiac] || [])
       : null;
@@ -413,7 +405,7 @@ router.get('/', protect, async (req, res) => {
 
       // Zodiac signs explicit filter
       if (zodiacFilterList.length > 0) {
-        const userZodiac = normalizeZodiacKey(lifestyle.zodiac || '');
+        const userZodiac = normalizeZodiacKey(resolveZodiacSign(lifestyle) || '');
         if (!zodiacFilterList.includes(userZodiac)) {
           return false;
         }
@@ -421,7 +413,7 @@ router.get('/', protect, async (req, res) => {
 
       // Compatible zodiac only
       if (compatibleSigns && compatibleSigns.length > 0) {
-        const userZodiac = normalizeZodiacKey(lifestyle.zodiac || '');
+        const userZodiac = normalizeZodiacKey(resolveZodiacSign(lifestyle) || '');
         if (!compatibleSigns.includes(userZodiac)) {
           return false;
         }
@@ -461,7 +453,7 @@ router.get('/', protect, async (req, res) => {
             coverPhoto: profile.coverPhoto || null,
             location: profile.location || {},
             interests: Array.isArray(profile.interests) ? profile.interests : [],
-            lifestyle: profile.lifestyle || {},
+            lifestyle: enrichLifestyle(profile.lifestyle || {}),
             preferences: profile.preferences || {},
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
             isOnline: getRotatingOnlineState(profile.userId, !!profile.isOnline, isDummyProfile),
@@ -482,7 +474,7 @@ router.get('/', protect, async (req, res) => {
             coverPhoto: profile.coverPhoto || null,
             location: profile.location || {},
             interests: Array.isArray(profile.interests) ? profile.interests : [],
-            lifestyle: profile.lifestyle || {},
+            lifestyle: enrichLifestyle(profile.lifestyle || {}),
             preferences: profile.preferences || {},
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
             // When user lookup fails, do not apply dummy rotation.
@@ -522,7 +514,9 @@ router.get('/me', protect, async (req, res) => {
       return res.json(null);
     }
 
-    res.json(profile);
+    const json = profile.toJSON();
+    json.lifestyle = enrichLifestyle(json.lifestyle || {});
+    res.json(json);
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -649,7 +643,7 @@ router.get('/:id', protect, async (req, res) => {
       coverPhoto: profile.coverPhoto || null,
       location: profile.location || {},
       interests: Array.isArray(profile.interests) ? profile.interests : [],
-      lifestyle: profile.lifestyle || {},
+      lifestyle: enrichLifestyle(profile.lifestyle || {}),
       preferences: profile.preferences || {},
       wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
       isOnline: profileOnlineState,
@@ -695,7 +689,7 @@ router.put('/me', protect, async (req, res) => {
         bio: updates.bio || '',
         location: updates.location || {},
         interests: Array.isArray(updates.interests) ? updates.interests : [],
-        lifestyle: updates.lifestyle || {},
+        lifestyle: enrichLifestyle(updates.lifestyle || {}),
         preferences: updates.preferences || {},
         wishlist: Array.isArray(updates.wishlist) ? updates.wishlist : [],
       });
@@ -728,10 +722,10 @@ router.put('/me', protect, async (req, res) => {
     }
 
     if (updates.lifestyle && typeof updates.lifestyle === 'object' && !Array.isArray(updates.lifestyle)) {
-      updates.lifestyle = {
+      updates.lifestyle = enrichLifestyle({
         ...(profile.lifestyle || {}),
         ...updates.lifestyle,
-      };
+      });
     }
 
     if (updates.preferences && typeof updates.preferences === 'object' && !Array.isArray(updates.preferences)) {

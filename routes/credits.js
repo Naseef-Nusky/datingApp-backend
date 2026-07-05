@@ -5,7 +5,8 @@ import CreditTransaction from '../models/CreditTransaction.js';
 import SystemSetting from '../models/SystemSetting.js';
 import { protect } from '../middleware/auth.js';
 import { getCreditSettings, DEFAULT_REFILL_PACKS } from '../utils/creditSettings.js';
-import { checkCanStartCall } from '../utils/callAccess.js';
+import { checkCanStartCall, checkCanSendChat, checkCanSendEmail, checkCanSendMingle } from '../utils/callAccess.js';
+import { buildStripeCheckoutRedirectUrl } from '../utils/universalLinks.js';
 
 const STRIPE_PRICES_KEY = 'stripe.credit_pack_prices';
 const STRIPE_SUBSCRIPTION_PRICES_KEY = 'stripe.subscription_prices'; // recurring monthly
@@ -172,6 +173,45 @@ router.get('/call-access', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/credits/chat-access
+// @desc    Check if user can open/send chat (credits for at least one message)
+// @access  Private
+router.get('/chat-access', protect, async (req, res) => {
+  try {
+    const result = await checkCanSendChat(req.user.id);
+    res.json(result);
+  } catch (error) {
+    console.error('Chat access check error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/credits/email-access
+// @desc    Check if user can send an email
+// @access  Private
+router.get('/email-access', protect, async (req, res) => {
+  try {
+    const result = await checkCanSendEmail(req.user.id);
+    res.json(result);
+  } catch (error) {
+    console.error('Email access check error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/credits/mingle-access
+// @desc    Check if user can send a Let's Mingle message
+// @access  Private
+router.get('/mingle-access', protect, async (req, res) => {
+  try {
+    const result = await checkCanSendMingle(req.user.id);
+    res.json(result);
+  } catch (error) {
+    console.error('Mingle access check error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET /api/credits/service-costs
 // @desc    Credit costs for chat, email send, email attachment unlocks (CRM-configured)
 // @access  Private
@@ -250,7 +290,6 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
 
     const displayLabel = `${credits} Credits`;
     const priceId = await getOrCreateStripeRefillPrice(String(pack.id || packId), displayLabel, credits, amountCents);
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const getSafeReturnPath = () => {
       if (typeof returnPath !== 'string' || !returnPath.startsWith('/')) {
         return '/dashboard';
@@ -262,16 +301,6 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
       return returnPath;
     };
     const safeReturnPath = getSafeReturnPath();
-    // Stripe replaces {CHECKOUT_SESSION_ID} only when it appears literally in success_url
-    // (URL.searchParams encodes braces and breaks substitution).
-    const buildRedirectUrl = (status) => {
-      const path = safeReturnPath.startsWith('/') ? safeReturnPath : `/${safeReturnPath}`;
-      const joiner = path.includes('?') ? '&' : '?';
-      if (status === 'success') {
-        return `${frontendUrl}${path}${joiner}refill=success&session_id={CHECKOUT_SESSION_ID}`;
-      }
-      return `${frontendUrl}${path}${joiner}refill=cancelled`;
-    };
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
@@ -281,8 +310,16 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: buildRedirectUrl('success'),
-      cancel_url: buildRedirectUrl('cancelled'),
+      success_url: buildStripeCheckoutRedirectUrl(req, {
+        returnPath: safeReturnPath,
+        flow: 'refill',
+        status: 'success',
+      }),
+      cancel_url: buildStripeCheckoutRedirectUrl(req, {
+        returnPath: safeReturnPath,
+        flow: 'refill',
+        status: 'cancelled',
+      }),
       client_reference_id: String(req.user.id),
       metadata: {
         userId: String(req.user.id),
@@ -292,7 +329,15 @@ router.post('/refill-checkout-session', protect, async (req, res) => {
       },
     });
 
-    res.json({ url: session.url, sessionId: session.id });
+    console.info('[Stripe] Refill checkout session created', {
+      userId: req.user.id,
+      sessionId: session.id,
+      packId: pack.id || packId,
+      credits,
+      successUrl: session.success_url,
+    });
+
+    res.json({ url: session.url, sessionId: session.id, successUrl: session.success_url });
   } catch (error) {
     console.error('Create refill checkout session error:', error);
     res.status(500).json({ message: error.message || 'Server error' });
@@ -418,7 +463,6 @@ router.post('/create-checkout-session', protect, async (req, res) => {
     const credits = getCreditsForPlan(plan, packConfig);
     const displayLabel = packConfig?.creditsLabel?.trim() || `${credits} Credits/Mo`;
     const priceId = await getOrCreateStripeSubscriptionPrice(plan, displayLabel, credits, amountCents);
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
@@ -428,8 +472,16 @@ router.post('/create-checkout-session', protect, async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: `${frontendUrl}/dashboard?upgrade=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${frontendUrl}/dashboard?upgrade=cancelled`,
+      success_url: buildStripeCheckoutRedirectUrl(req, {
+        returnPath: '/dashboard',
+        flow: 'upgrade',
+        status: 'success',
+      }),
+      cancel_url: buildStripeCheckoutRedirectUrl(req, {
+        returnPath: '/dashboard',
+        flow: 'upgrade',
+        status: 'cancelled',
+      }),
       client_reference_id: String(req.user.id),
       metadata: {
         userId: String(req.user.id),
@@ -445,7 +497,15 @@ router.post('/create-checkout-session', protect, async (req, res) => {
       },
     });
 
-    res.json({ url: session.url, sessionId: session.id });
+    console.info('[Stripe] Subscription checkout session created', {
+      userId: req.user.id,
+      sessionId: session.id,
+      plan,
+      credits,
+      successUrl: session.success_url,
+    });
+
+    res.json({ url: session.url, sessionId: session.id, successUrl: session.success_url });
   } catch (error) {
     console.error('Create checkout session error:', error);
     res.status(500).json({ message: error.message || 'Server error' });
@@ -461,6 +521,10 @@ router.post('/confirm-payment', protect, async (req, res) => {
       return res.status(503).json({ message: 'Stripe is not configured' });
     }
     const { session_id: sessionId } = req.body;
+    console.info('[Stripe] Confirm subscription payment request', {
+      userId: req.user.id,
+      sessionId,
+    });
     if (!sessionId) {
       return res.status(400).json({ message: 'Missing session_id' });
     }
@@ -501,6 +565,13 @@ router.post('/confirm-payment', protect, async (req, res) => {
       value: { sessionIds: [...ids.slice(-999), sessionId] },
     });
     const updated = await User.findByPk(req.user.id, { attributes: ['credits', 'subscriptionPlan'] });
+    console.info('[Stripe] Subscription payment success', {
+      userId: req.user.id,
+      sessionId,
+      plan,
+      subscriptionPlan: updated?.subscriptionPlan,
+      totalCredits: updated?.credits ?? 0,
+    });
     res.json({
       message: 'Subscription activated',
       subscriptionPlan: updated.subscriptionPlan,
@@ -521,6 +592,10 @@ router.post('/confirm-refill-payment', protect, async (req, res) => {
       return res.status(503).json({ message: 'Stripe is not configured' });
     }
     const { session_id: sessionId } = req.body;
+    console.info('[Stripe] Confirm refill payment request', {
+      userId: req.user.id,
+      sessionId,
+    });
     if (!sessionId) {
       return res.status(400).json({ message: 'Missing session_id' });
     }
@@ -565,6 +640,13 @@ router.post('/confirm-refill-payment', protect, async (req, res) => {
     await SystemSetting.upsert({
       key: 'stripe.refill_fulfilled_sessions',
       value: { sessionIds: [...ids.slice(-999), sessionId] },
+    });
+
+    console.info('[Stripe] Refill payment success', {
+      userId: req.user.id,
+      sessionId,
+      creditsAdded: credits,
+      totalCredits: newCredits,
     });
 
     res.json({

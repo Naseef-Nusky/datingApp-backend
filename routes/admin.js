@@ -31,6 +31,7 @@ import {
   Story,
   CreditTransaction,
   Block,
+  Compatibility,
 } from '../models/index.js';
 import { protect, admin, superadmin, notCrmStreamerStaff } from '../middleware/auth.js';
 import {
@@ -77,6 +78,7 @@ import {
 import { sendLoginLinkEmail } from '../utils/emailService.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import { getEmailFrontendUrl } from '../utils/frontendUrl.js';
+import { buildLoginCallbackUrl } from '../utils/universalLinks.js';
 import { markUserVerified, markUserUnverified } from '../utils/userCompliance.js';
 import {
   formatDuration,
@@ -165,11 +167,19 @@ const purgeUserRelatedRecords = async (userId, transaction = null) => {
     where: { [Op.or]: [{ newUserId: userId }, { streamerUserId: userId }] },
     ...opts,
   });
+  await Compatibility.destroy({
+    where: { [Op.or]: [{ userLowId: userId }, { userHighId: userId }] },
+    ...opts,
+  });
   await Profile.destroy({ where: { userId }, ...opts });
 };
 
-const canPermanentlyDeleteDatingUsers = (req) =>
-  req.user?.userType === 'superadmin' || req.user?.userType === 'viewer';
+const canManageDatingUsers = (req) => {
+  const role = req.user?.userType;
+  return role === 'superadmin' || role === 'admin';
+};
+
+const canPermanentlyDeleteDatingUsers = (req) => canManageDatingUsers(req);
 
 const permanentlyDeleteDatingUser = async (user) => {
   const adminRoles = ['superadmin', 'admin', 'moderator', 'viewer', 'crm_streamer'];
@@ -200,7 +210,18 @@ const sendCrmCreatedUserLoginLink = async (userId, email, firstName, req = null)
       { where: { id: userId } }
     );
 
-    const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    let loginUrl;
+    try {
+      loginUrl = buildLoginCallbackUrl(rawToken, {
+        linkDelivery: 'web',
+        webFallbackBase: getEmailFrontendUrl(),
+      });
+    } catch {
+      loginUrl = null;
+    }
+    if (!loginUrl) {
+      loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    }
     const displayName = firstName || normalizedEmail.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(normalizedEmail, displayName, loginUrl, userId, {
       isNewUser: true,
@@ -802,7 +823,7 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
-      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+      if (!canManageDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create users' });
       }
       if (!req.file) {
@@ -945,7 +966,7 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
-      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+      if (!canManageDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create streamers' });
       }
       if (!req.file) {
@@ -1099,7 +1120,7 @@ router.post(
   async (req, res) => {
     try {
       // Check if user has permission (superadmin or viewer)
-      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+      if (!canManageDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create users' });
       }
 
@@ -1204,7 +1225,7 @@ router.post(
   ],
   async (req, res) => {
     try {
-      if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+      if (!canManageDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create streamers' });
       }
       const errors = validationResult(req);
@@ -1282,9 +1303,13 @@ router.post(
 
 // @route   PUT /api/admin/users/:id/toggle-active
 // @desc    Toggle user active status
-// @access  Superadmin only
-router.put('/users/:id/toggle-active', protect, superadmin, async (req, res) => {
+// @access  Superadmin or Admin
+router.put('/users/:id/toggle-active', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
+    if (!canManageDatingUsers(req)) {
+      return res.status(403).json({ message: 'You do not have permission to update users' });
+    }
+
     const { id } = req.params;
     const { isActive } = req.body;
 
@@ -1318,10 +1343,10 @@ router.put('/users/:id/toggle-active', protect, superadmin, async (req, res) => 
 
 // @route   PUT /api/admin/users/:id/toggle-verified
 // @desc    Toggle user verified status
-// @access  Superadmin or Viewer
+// @access  Superadmin or Admin
 router.put('/users/:id/toggle-verified', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
-    if (req.user.userType !== 'superadmin' && req.user.userType !== 'viewer') {
+    if (!canManageDatingUsers(req)) {
       return res.status(403).json({ message: 'You do not have permission to toggle verification' });
     }
 
@@ -1728,6 +1753,10 @@ router.delete('/profiles/:userId/photo', protect, admin, async (req, res) => {
 // @access  Admin only
 router.put('/profiles/:userId/online', protect, admin, notCrmStreamerStaff, async (req, res) => {
   try {
+    if (!canManageDatingUsers(req)) {
+      return res.status(403).json({ message: 'You do not have permission to update profiles' });
+    }
+
     const userId = req.params.userId;
     const { isOnline } = req.body;
     const profile = await Profile.findOne({ where: { userId } });
@@ -1750,6 +1779,10 @@ router.put('/profiles/:userId/online', protect, admin, notCrmStreamerStaff, asyn
 // @access  Admin only
 router.put('/profiles/:userId', protect, admin, async (req, res) => {
   try {
+    if (!canManageDatingUsers(req)) {
+      return res.status(403).json({ message: 'You do not have permission to update profiles' });
+    }
+
     const userId = req.params.userId;
     const { firstName, lastName, age, gender, bio, location } = req.body;
     const profile = await Profile.findOne({ where: { userId } });

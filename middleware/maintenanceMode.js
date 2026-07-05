@@ -1,6 +1,6 @@
 import { getSiteSettings } from '../utils/siteSettings.js';
 
-const EXACT_PATHS = new Set(['/api/health']);
+const EXACT_PATHS = new Set(['/api/health', '/api/mobile/health']);
 
 /** POST-only paths allowed during maintenance (CRM admin login). */
 const MAINTENANCE_AUTH_ALLOW = new Set(['/api/auth/admin-login']);
@@ -24,7 +24,7 @@ export const enforceApiMaintenanceMode = async (req, res, next) => {
     return next();
   }
 
-  if (path === '/api/auth/site-status') {
+  if (path === '/api/auth/site-status' || path === '/api/mobile/auth/site-status') {
     return next();
   }
 

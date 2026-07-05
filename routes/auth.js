@@ -13,10 +13,12 @@ import bcrypt from 'bcryptjs';
 import { ensureVerificationStateForUser } from '../utils/userCompliance.js';
 import * as jose from 'jose';
 import jwt from 'jsonwebtoken';
+import { touchMobileAppUser } from '../utils/mobileAppUser.js';
 import { getSiteSettings } from '../utils/siteSettings.js';
 import { recordCrmNewUserEvent } from '../utils/crmEvents.js';
 import { scheduleNewUserStreamerEmail } from '../utils/newUserStreamerEmail.js';
 import { getFrontendUrl, getEmailFrontendUrl } from '../utils/frontendUrl.js';
+import { buildLoginCallbackUrl, getMobileAppWebBase } from '../utils/universalLinks.js';
 import {
   findCrmStaffByEmail,
   findAppDatingUserByEmail,
@@ -206,12 +208,76 @@ router.post(
 
       if (!(await assertAllowRegistrations(res))) return;
 
-      const { email, password, firstName, lastName, age, gender, lifestyle } = req.body;
+      const { email, password, firstName, lastName, age, gender, lifestyle, bio, interests, preferences } =
+        req.body;
 
       // Normalize email to lowercase for case-insensitive check
       const normalizedEmail = email.toLowerCase().trim();
 
       const memberExists = await findRegularMemberByEmail(User, normalizedEmail);
+
+      // Age restriction
+      if (age < 18) {
+        return res.status(400).json({ message: 'Must be 18 or older to register' });
+      }
+
+      const clientIP = getClientIP(req);
+      const location = await detectLocation(clientIP);
+      const lifestyleData =
+        lifestyle && typeof lifestyle === 'object' && !Array.isArray(lifestyle) ? lifestyle : {};
+      const prefs = preferences && typeof preferences === 'object' ? preferences : {};
+      const profileFields = {
+        firstName,
+        lastName: lastName || '',
+        age,
+        gender,
+        bio: bio || null,
+        interests: Array.isArray(interests) ? interests : [],
+        preferences: {
+          lookingFor: prefs.lookingFor || null,
+          description: prefs.description || '',
+        },
+        location,
+        lifestyle: lifestyleData,
+      };
+
+      // Resume signup started via magic link — account exists but profile not finished
+      if (memberExists && memberExists.registrationComplete === false) {
+        memberExists.password = password;
+        await memberExists.save();
+
+        let profile = await Profile.findOne({ where: { userId: memberExists.id } });
+        if (profile) {
+          await profile.update({
+            ...profileFields,
+            chatRegisteredAt: profile.chatRegisteredAt || new Date(),
+          });
+        } else {
+          profile = await Profile.create({
+            userId: memberExists.id,
+            ...profileFields,
+            chatRegisteredAt: new Date(),
+          });
+        }
+
+        const token = generateToken(memberExists.id, memberExists.userType);
+        return res.status(201).json({
+          token,
+          resumed: true,
+          registrationComplete: false,
+          user: {
+            id: memberExists.id,
+            email: memberExists.email,
+            userType: memberExists.userType,
+          },
+          profile: {
+            firstName: profile.firstName,
+            age: profile.age,
+            location: profile.location,
+          },
+        });
+      }
+
       if (memberExists) {
         return res.status(400).json({
           message: 'Email address already registered for a member account',
@@ -219,53 +285,26 @@ router.post(
         });
       }
 
-      // Age restriction
-      if (age < 18) {
-        return res.status(400).json({ message: 'Must be 18 or older to register' });
-      }
-
-      // Frontend registration = real users only. Never trust role from client; streamers/admins are created only in CRM.
+      // Frontend registration = real users only. Finish wizard + PUT registration-complete marks done.
       const user = await User.create({
         email: normalizedEmail,
         password,
         userType: 'regular',
         isAdminCreated: false,
-        registrationComplete: true,
+        registrationComplete: false,
       });
 
-      // Detect location from IP
-      const clientIP = getClientIP(req);
-      const location = await detectLocation(clientIP);
+      const profile = await Profile.create({
+        userId: user.id,
+        ...profileFields,
+        chatRegisteredAt: new Date(),
+      });
 
-      // Create profile
-      const profile = await Profile.create(
-        {
-          userId: user.id,
-          firstName,
-          lastName: lastName || '',
-          age,
-          gender,
-          location,
-          lifestyle: lifestyle && typeof lifestyle === 'object' && !Array.isArray(lifestyle) ? lifestyle : {},
-          // Mark as chat ready - they'll be registered when they first open chat or when someone chats with them
-          chatRegisteredAt: new Date(), // Pre-mark as registered so they can chat immediately
-        },
-        {
-          returning: true,
-        }
-      );
-
-      await recordCrmNewUserEvent(user, { source: 'registration', profile });
-
-      scheduleNewUserStreamerEmail(user, profile).catch((err) =>
-        console.error('scheduleNewUserStreamerEmail:', err.message)
-      );
-
-      // Generate token (payload includes role for role-based UI)
       const token = generateToken(user.id, user.userType);
 
       res.status(201).json({
         token,
+        registrationComplete: false,
         user: {
           id: user.id,
           email: user.email,
@@ -310,11 +349,15 @@ router.post(
       if (memberExists) {
         return res.status(200).json({
           exists: true,
-          message: 'Email address already registered for a member account',
+          registrationComplete: memberExists.registrationComplete !== false,
+          message:
+            memberExists.registrationComplete === false
+              ? 'Account started — you can finish registration or use the login link from your email'
+              : 'Email address already registered for a member account',
         });
       }
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         exists: false,
         message: 'Email is available'
       });
@@ -411,6 +454,9 @@ router.post(
         }
       }
       const token = generateToken(user.id, user.userType);
+      if (req.clientPlatform === 'mobile') {
+        touchMobileAppUser(user.id).catch(() => {});
+      }
       res.json({
         token,
         user: {
@@ -795,18 +841,16 @@ router.post(
       );
 
       let loginUrl;
-      if (linkDelivery === 'ios-native') {
-        const rawScheme = process.env.IOS_APP_LOGIN_SCHEME || 'com.vantagedating.app';
-        const scheme = String(rawScheme)
-          .trim()
-          .replace(/:$/, '')
-          .replace(/^\/+/, '');
-        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(scheme)) {
-          return res.status(500).json({ message: 'Invalid IOS_APP_LOGIN_SCHEME server configuration.' });
-        }
-        loginUrl = `${scheme}://auth/login-callback?token=${encodeURIComponent(rawToken)}`;
-      } else {
-        loginUrl = `${frontendUrl}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+      try {
+        loginUrl = buildLoginCallbackUrl(rawToken, {
+          linkDelivery,
+          webFallbackBase: frontendUrl,
+        });
+      } catch (schemeErr) {
+        return res.status(500).json({ message: schemeErr.message || 'Invalid login link configuration' });
+      }
+      if (!loginUrl) {
+        return res.status(500).json({ message: 'Could not build login link URL' });
       }
       const firstName = user.profile?.firstName || user.email.split('@')[0] || 'User';
 
@@ -1038,6 +1082,9 @@ router.post(
       }
 
       const token = generateToken(user.id, user.userType);
+      if (req.clientPlatform === 'mobile') {
+        touchMobileAppUser(user.id).catch(() => {});
+      }
 
       const hasPhoto = Array.isArray(profile?.photos) && profile.photos.length > 0;
       const hasLookingFor = Boolean(profile?.preferences?.lookingFor);
@@ -1105,7 +1152,7 @@ router.get('/google', (req, res) => {
 // @desc    Handle Google OAuth callback: exchange code for user, create/find user, redirect to frontend with token
 // @access  Public
 router.get('/google/callback', async (req, res) => {
-  const frontendUrl = getFrontendUrl(req);
+  const frontendUrl = getMobileAppWebBase() || getFrontendUrl(req);
   const errorRedirect = (msg) => res.redirect(`${frontendUrl}/?error=${encodeURIComponent(msg)}`);
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
@@ -1193,7 +1240,18 @@ router.get('/google/callback', async (req, res) => {
       { where: { id: user.id } }
     );
 
-    const loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    let loginUrl;
+    try {
+      loginUrl = buildLoginCallbackUrl(rawToken, {
+        linkDelivery: 'web',
+        webFallbackBase: getEmailFrontendUrl(),
+      });
+    } catch {
+      loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    }
+    if (!loginUrl) {
+      loginUrl = `${getEmailFrontendUrl()}/auth/login-callback?token=${encodeURIComponent(rawToken)}`;
+    }
     const displayName = user.profile?.firstName || firstName || email.split('@')[0] || 'User';
     const emailResult = await sendLoginLinkEmail(email, displayName, loginUrl, user.id, {
       isNewUser,
