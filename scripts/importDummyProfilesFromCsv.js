@@ -317,7 +317,7 @@ async function main() {
       lifestyle: {},
       preferences: {},
       wishlist: [],
-      isOnline: false,
+      isOnline: true,
       profileViews: 0,
     });
 
@@ -471,7 +471,7 @@ async function main() {
         lifestyle: {},
         preferences: {},
         wishlist: [],
-        isOnline: false,
+        isOnline: true,
         profileViews: 0,
       });
 

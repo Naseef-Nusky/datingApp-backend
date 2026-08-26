@@ -27,6 +27,7 @@ import {
   closeStaleChatSessions,
 } from './utils/engagementTracking.js';
 import { enforceApiMaintenanceMode } from './middleware/maintenanceMode.js';
+import { isDummyUserEmail, markDummyProfilesOnline } from './utils/dummyUser.js';
 import {
   checkFreeToFreeRestriction,
   expireVerificationSweep,
@@ -887,9 +888,13 @@ io.on('connection', (socket) => {
       console.log(`👋 User ${userId} disconnected (socket: ${socket.id})`);
       socketUserMap.delete(socket.id);
       try {
-        const u = await User.findByPk(userId, { attributes: ['userType'] });
+        const u = await User.findByPk(userId, { attributes: ['userType', 'email'] });
         if (u && (u.userType === 'streamer' || u.userType === 'talent')) {
           await closeActiveSessionsForStreamer(userId);
+        }
+        // Dummy profiles stay online like logged-in members (they have no real session).
+        if (u && isDummyUserEmail(u.email)) {
+          return;
         }
       } catch (engErr) {
         console.error('Disconnect: close engagement sessions error', engErr.message);
@@ -910,6 +915,15 @@ const startServer = async () => {
   try {
     // Connect to database and sync models
     await connectDB();
+
+    try {
+      const dummyOnlineCount = await markDummyProfilesOnline(User, Profile);
+      if (dummyOnlineCount > 0) {
+        console.log(`✅ Dummy profiles marked online: ${dummyOnlineCount}`);
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not mark dummy profiles online:', error.message);
+    }
     
     // Start daily digest scheduler
     try {
