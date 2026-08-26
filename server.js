@@ -27,7 +27,7 @@ import {
   closeStaleChatSessions,
 } from './utils/engagementTracking.js';
 import { enforceApiMaintenanceMode } from './middleware/maintenanceMode.js';
-import { isDummyUserEmail, markDummyProfilesOnline } from './utils/dummyUser.js';
+import { markDummyProfilesOffline } from './utils/dummyUser.js';
 import {
   checkFreeToFreeRestriction,
   expireVerificationSweep,
@@ -888,18 +888,14 @@ io.on('connection', (socket) => {
       console.log(`👋 User ${userId} disconnected (socket: ${socket.id})`);
       socketUserMap.delete(socket.id);
       try {
-        const u = await User.findByPk(userId, { attributes: ['userType', 'email'] });
+        const u = await User.findByPk(userId, { attributes: ['userType'] });
         if (u && (u.userType === 'streamer' || u.userType === 'talent')) {
           await closeActiveSessionsForStreamer(userId);
-        }
-        // Dummy profiles stay online like logged-in members (they have no real session).
-        if (u && isDummyUserEmail(u.email)) {
-          return;
         }
       } catch (engErr) {
         console.error('Disconnect: close engagement sessions error', engErr.message);
       }
-      // Set offline + last_seen (role-based: backend controls online status)
+      // Set offline + last_seen (same for real and dummy users after logout/disconnect)
       Profile.update(
         { isOnline: false, lastSeen: new Date() },
         { where: { userId } }
@@ -917,12 +913,12 @@ const startServer = async () => {
     await connectDB();
 
     try {
-      const dummyOnlineCount = await markDummyProfilesOnline(User, Profile);
-      if (dummyOnlineCount > 0) {
-        console.log(`✅ Dummy profiles marked online: ${dummyOnlineCount}`);
+      const dummyOfflineCount = await markDummyProfilesOffline(User, Profile);
+      if (dummyOfflineCount > 0) {
+        console.log(`✅ Dummy profiles reset to offline: ${dummyOfflineCount}`);
       }
     } catch (error) {
-      console.warn('⚠️ Could not mark dummy profiles online:', error.message);
+      console.warn('⚠️ Could not reset dummy profiles offline:', error.message);
     }
     
     // Start daily digest scheduler

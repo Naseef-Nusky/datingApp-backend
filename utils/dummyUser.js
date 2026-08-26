@@ -36,8 +36,11 @@ export function onlyDummyUsersEmailWhere() {
   };
 }
 
-/** Mark seeded dummy profiles online the same way a real logged-in user is. */
-export async function markDummyProfilesOnline(User, Profile) {
+/**
+ * Reset seeded dummy profiles to offline.
+ * They only appear online while actually logged in (same as real users).
+ */
+export async function markDummyProfilesOffline(User, Profile) {
   const dummyUsers = await User.findAll({
     where: onlyDummyUsersEmailWhere(),
     attributes: ['id'],
@@ -45,7 +48,7 @@ export async function markDummyProfilesOnline(User, Profile) {
   const ids = dummyUsers.map((u) => u.id);
   if (ids.length === 0) return 0;
   const [count] = await Profile.update(
-    { isOnline: true },
+    { isOnline: false, lastSeen: new Date() },
     { where: { userId: { [Op.in]: ids } } }
   );
   return count;
