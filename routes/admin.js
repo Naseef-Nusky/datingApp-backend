@@ -174,6 +174,13 @@ const purgeUserRelatedRecords = async (userId, transaction = null) => {
   await Profile.destroy({ where: { userId }, ...opts });
 };
 
+/** Create dating profiles: Super Admin, Admin, or Viewer (create + view only). */
+const canCreateDatingUsers = (req) => {
+  const role = req.user?.userType;
+  return role === 'superadmin' || role === 'admin' || role === 'viewer';
+};
+
+/** Edit / delete / verify / online / activate: Super Admin + Admin only. */
 const canManageDatingUsers = (req) => {
   const role = req.user?.userType;
   return role === 'superadmin' || role === 'admin';
@@ -823,7 +830,7 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
-      if (!canManageDatingUsers(req)) {
+      if (!canCreateDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create users' });
       }
       if (!req.file) {
@@ -966,7 +973,7 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
-      if (!canManageDatingUsers(req)) {
+      if (!canCreateDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create streamers' });
       }
       if (!req.file) {
@@ -1119,8 +1126,7 @@ router.post(
   ],
   async (req, res) => {
     try {
-      // Check if user has permission (superadmin or viewer)
-      if (!canManageDatingUsers(req)) {
+      if (!canCreateDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create users' });
       }
 
@@ -1225,7 +1231,7 @@ router.post(
   ],
   async (req, res) => {
     try {
-      if (!canManageDatingUsers(req)) {
+      if (!canCreateDatingUsers(req)) {
         return res.status(403).json({ message: 'You do not have permission to create streamers' });
       }
       const errors = validationResult(req);
@@ -1626,6 +1632,9 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
+      if (!canCreateDatingUsers(req)) {
+        return res.status(403).json({ message: 'You do not have permission to upload photos' });
+      }
       if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
       }
@@ -1682,6 +1691,9 @@ router.post(
   profilePhotoUpload.single('photo'),
   async (req, res) => {
     try {
+      if (!canCreateDatingUsers(req)) {
+        return res.status(403).json({ message: 'You do not have permission to upload photos' });
+      }
       if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
       }
@@ -1730,6 +1742,9 @@ router.post(
 // @access  Admin only
 router.delete('/profiles/:userId/photo', protect, admin, async (req, res) => {
   try {
+    if (!canManageDatingUsers(req)) {
+      return res.status(403).json({ message: 'You do not have permission to delete photos' });
+    }
     const userId = req.params.userId;
     const profile = await Profile.findOne({ where: { userId } });
     if (!profile) return res.status(404).json({ message: 'Profile not found' });
