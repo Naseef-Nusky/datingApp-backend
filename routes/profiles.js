@@ -415,7 +415,7 @@ router.get('/', protect, async (req, res) => {
       paginatedProfiles.map(async (profile) => {
         try {
           const user = await User.findByPk(profile.userId, {
-            attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
+            attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser', 'isAiCompanion'],
           });
           return {
             id: profile.id,
@@ -434,6 +434,7 @@ router.get('/', protect, async (req, res) => {
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
             isOnline: !!profile.isOnline,
             todayStatus: profile.todayStatus || null,
+            isAiCompanion: Boolean(user?.isAiCompanion),
             user: user || null,
           };
         } catch (error) {
@@ -455,6 +456,7 @@ router.get('/', protect, async (req, res) => {
             wishlist: Array.isArray(profile.wishlist) ? profile.wishlist : [],
             isOnline: !!profile.isOnline,
             todayStatus: profile.todayStatus || null,
+            isAiCompanion: false,
             user: null,
           };
         }
@@ -512,7 +514,7 @@ router.get('/:id', protect, async (req, res) => {
 
     // Get user details
     const user = await User.findByPk(profile.userId, {
-      attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser'],
+      attributes: ['id', 'email', 'userType', 'credits', 'isActive', 'isVerified', 'isFreeUser', 'isAiCompanion'],
     });
 
     const isStreamerOrTalent =
@@ -618,6 +620,7 @@ router.get('/:id', protect, async (req, res) => {
       isOnline: profileOnlineState,
       todayStatus: profile.todayStatus || null,
       profileViews: profile.profileViews || 0,
+      isAiCompanion: Boolean(user?.isAiCompanion),
       user: user || null,
     });
   } catch (error) {

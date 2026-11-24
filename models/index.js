@@ -21,10 +21,23 @@ import SystemSetting from './SystemSetting.js';
 import CrmEvent from './CrmEvent.js';
 import NewUserStreamerEmail from './NewUserStreamerEmail.js';
 import Compatibility from './Compatibility.js';
+import AiCompanionPersona from './AiCompanionPersona.js';
+import AiCallbackRequest from './AiCallbackRequest.js';
+import AiGiftEvent from './AiGiftEvent.js';
 
 // Define associations
 User.hasOne(Profile, { foreignKey: 'userId', as: 'profile' });
 Profile.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+User.hasOne(AiCompanionPersona, { foreignKey: 'userId', as: 'aiPersona' });
+AiCompanionPersona.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+AiCallbackRequest.belongsTo(User, { foreignKey: 'memberId', as: 'member' });
+AiCallbackRequest.belongsTo(User, { foreignKey: 'companionId', as: 'companion' });
+
+AiGiftEvent.belongsTo(User, { foreignKey: 'memberId', as: 'member' });
+AiGiftEvent.belongsTo(User, { foreignKey: 'companionId', as: 'companion' });
+AiGiftEvent.belongsTo(GiftCatalog, { foreignKey: 'giftCatalogId', as: 'gift' });
 
 // Match associations
 Match.belongsTo(User, { foreignKey: 'user1', as: 'user1Data' });
@@ -110,6 +123,9 @@ export {
   CrmEvent,
   NewUserStreamerEmail,
   Compatibility,
+  AiCompanionPersona,
+  AiCallbackRequest,
+  AiGiftEvent,
 };
 
 

@@ -292,7 +292,8 @@ router.post('/', protect, async (req, res) => {
     const isStreamerSender = req.user.userType === 'streamer' || req.user.userType === 'talent';
 
     if (isChargeableChat && !isStreamerSender) {
-      const access = await checkCanSendChat(req.user.id);
+      // AI companions: allow chat without active subscription (credits still charged when cost > 0)
+      const access = await checkCanSendChat(req.user.id, { receiverId });
       if (!access.allowed) {
         const status = access.code === 'SUBSCRIPTION_REQUIRED' ? 403 : 400;
         return res.status(status).json({
@@ -509,6 +510,27 @@ router.post('/', protect, async (req, res) => {
     }
 
     res.status(201).json(responsePayload);
+
+    // AI companion auto-reply (non-blocking)
+    try {
+      const { isActiveAiCompanion, handleMemberMessageToAiCompanion } = await import(
+        '../utils/aiCompanionService.js'
+      );
+      const aiReceiver = await isActiveAiCompanion(receiverId);
+      if (aiReceiver && req.user.userType === 'regular' && effectiveType === 'text') {
+        setImmediate(() => {
+          handleMemberMessageToAiCompanion({
+            companionId: receiverId,
+            memberId: req.user.id,
+            memberMessage: content || '',
+            chatId: chat?.id || null,
+            io: req.io,
+          }).catch((err) => console.error('[AI Companion] reply error:', err.message));
+        });
+      }
+    } catch (aiHookErr) {
+      console.error('[AI Companion] hook error:', aiHookErr.message);
+    }
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ message: 'Server error' });

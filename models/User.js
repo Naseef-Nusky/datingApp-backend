@@ -42,6 +42,12 @@ const User = sequelize.define(
       defaultValue: false,
       field: 'is_admin_created',
     },
+    /** AI companion dating profile (chatbot). Streamer-like for credits/browse. */
+    isAiCompanion: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'is_ai_companion',
+    },
     isVerified: {
       type: DataTypes.BOOLEAN,
       defaultValue: false,

@@ -48,6 +48,13 @@ import streamerRoutes from './routes/streamer.js';
 import userStatusRoutes from './routes/userStatus.js';
 import agoraRoutes from './routes/agora.js';
 import adminRoutes from './routes/admin.js';
+import adminAiCompanionsRoutes from './routes/adminAiCompanions.js';
+import aiCompanionsMemberRoutes from './routes/aiCompanions.js';
+import { ensureAiCompanionSchema } from './utils/ensureAiCompanionSchema.js';
+import {
+  handleCallAttemptToAiCompanion,
+  isActiveAiCompanion,
+} from './utils/aiCompanionService.js';
 import wishlistRoutes from './routes/wishlist.js';
 import settingsRoutes from './routes/settings.js';
 import vipRoutes from './routes/vip.js';
@@ -233,8 +240,13 @@ app.get('/api/health', (req, res) => {
 
 app.use(enforceApiMaintenanceMode);
 
+app.set('io', io);
+
 // API Routes
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', (req, res, next) => {
+  req.io = io;
+  next();
+}, authRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/matches', matchRoutes);
 // Pass io instance to message routes for real-time updates
@@ -254,6 +266,8 @@ app.use('/api/streamer', streamerRoutes);
 app.use('/api/user', userStatusRoutes);
 app.use('/api/agora', agoraRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/ai-companions', adminAiCompanionsRoutes);
+app.use('/api/ai-companions', aiCompanionsMemberRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/vip', vipRoutes);
@@ -374,6 +388,27 @@ io.on('connection', (socket) => {
         costPerMinute: callAccess.costPerMinute,
       });
       return;
+    }
+
+    // AI companions cannot take live calls — reply in chat + optional staff callback flow
+    try {
+      const aiTarget = await isActiveAiCompanion(receiverId);
+      if (aiTarget) {
+        await handleCallAttemptToAiCompanion({
+          callerId,
+          companionId: receiverId,
+          callType: data.callType || 'voice',
+          io,
+        });
+        socket.emit('call-request-error', {
+          message:
+            'This is an AI companion. Live calls aren’t available — check your chat for their reply about a site-team callback.',
+          code: 'AI_COMPANION_NO_CALL',
+        });
+        return;
+      }
+    } catch (aiCallErr) {
+      console.error('[SERVER] AI companion call intercept error:', aiCallErr.message);
     }
     
     console.log(`🔍 [SERVER] Looking for receiver in room: ${roomName}`);
@@ -911,6 +946,13 @@ const startServer = async () => {
   try {
     // Connect to database and sync models
     await connectDB();
+
+    try {
+      await ensureAiCompanionSchema();
+      console.log('✅ AI companion schema ensured');
+    } catch (error) {
+      console.warn('⚠️ AI companion schema ensure:', error.message);
+    }
 
     try {
       const dummyOfflineCount = await markDummyProfilesOffline(User, Profile);

@@ -13,6 +13,12 @@ export const DEFAULT_SITE_SETTINGS = {
   enableNewUserStreamerEmail: true,
   /** Minutes to wait before sending (default 2). */
   newUserStreamerEmailDelayMinutes: 60,
+  /** AI companion chatbot profiles (auto-reply, welcome, gift tips). */
+  enableAiCompanions: true,
+  /** Minutes after registration before AI welcome message. */
+  aiCompanionWelcomeDelayMinutes: 5,
+  /** Max AI companions that may welcome a new user. */
+  aiCompanionWelcomeMax: 2,
 };
 
 let cache = { value: null, at: 0 };

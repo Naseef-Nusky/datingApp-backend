@@ -99,8 +99,10 @@ async function loadUserForAccess(userOrId) {
 
 /**
  * @param {import('../models/User.js').default | string} userOrId
+ * @param {{ receiverId?: string, waiveSubscription?: boolean } } [options]
+ *        waiveSubscription — e.g. messaging an AI companion (engagement); credits still apply when cost > 0
  */
-export async function checkCanSendChat(userOrId) {
+export async function checkCanSendChat(userOrId, options = {}) {
   const user = await loadUserForAccess(userOrId);
   if (!user) {
     return { allowed: false, code: 'USER_NOT_FOUND', message: 'User not found' };
@@ -110,12 +112,24 @@ export async function checkCanSendChat(userOrId) {
     return { allowed: true, waived: true, balance: user.credits || 0 };
   }
 
+  let waiveSubscription = Boolean(options.waiveSubscription);
+  if (!waiveSubscription && options.receiverId) {
+    try {
+      const receiver = await User.findByPk(options.receiverId, {
+        attributes: ['id', 'isAiCompanion', 'userType'],
+      });
+      if (receiver?.isAiCompanion) waiveSubscription = true;
+    } catch {
+      /* ignore */
+    }
+  }
+
   const costPerMessage = await getChatMessageCost();
   if (costPerMessage <= 0) {
     return { allowed: true, costPerMessage: 0, balance: user.credits || 0 };
   }
 
-  if (!hasActiveSubscription(user)) {
+  if (!waiveSubscription && !hasActiveSubscription(user)) {
     return {
       allowed: false,
       code: 'SUBSCRIPTION_REQUIRED',
@@ -137,7 +151,7 @@ export async function checkCanSendChat(userOrId) {
     };
   }
 
-  return { allowed: true, costPerMessage, balance };
+  return { allowed: true, costPerMessage, balance, subscriptionWaived: waiveSubscription };
 }
 
 /**

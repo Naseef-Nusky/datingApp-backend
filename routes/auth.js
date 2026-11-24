@@ -734,6 +734,20 @@ router.put('/me/registration-complete', protect, async (req, res) => {
       scheduleNewUserStreamerEmail(user, profile).catch((err) =>
         console.error('scheduleNewUserStreamerEmail:', err.message)
       );
+      // Delayed AI companion welcome messages
+      import('../utils/siteSettings.js')
+        .then(({ getSiteSettings }) => getSiteSettings())
+        .then((site) => {
+          const delayMin = Number(site.aiCompanionWelcomeDelayMinutes) || 5;
+          setTimeout(() => {
+            import('../utils/aiCompanionService.js')
+              .then(({ sendWelcomeFromMatchingCompanions }) =>
+                sendWelcomeFromMatchingCompanions(user.id, req.io || req.app?.get?.('io') || null)
+              )
+              .catch((err) => console.error('AI companion welcome:', err.message));
+          }, Math.max(1, delayMin) * 60 * 1000);
+        })
+        .catch(() => {});
     }
 
     res.json({ registrationComplete: true });

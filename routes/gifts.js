@@ -119,6 +119,22 @@ router.post('/send', protect, async (req, res) => {
       creditsUsed: creditCost,
     });
 
+    try {
+      const { isActiveAiCompanion } = await import('../utils/aiCompanionService.js');
+      const { AiGiftEvent } = await import('../models/index.js');
+      if (await isActiveAiCompanion(receiverId)) {
+        await AiGiftEvent.create({
+          memberId: senderId,
+          companionId: receiverId,
+          giftCatalogId: giftId,
+          eventType: 'purchased',
+          meta: { giftRecordId: gift.id, creditCost },
+        });
+      }
+    } catch (aiGiftLogErr) {
+      console.error('AI gift purchase log error:', aiGiftLogErr.message);
+    }
+
     if (creditCost > 0) {
       // Only record a spending transaction + VIP spend for non-streamers.
       const senderUser = await User.findByPk(senderId, { attributes: ['id', 'userType'] });
