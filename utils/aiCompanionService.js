@@ -66,24 +66,45 @@ function humanizeDatingChat(text) {
   s = s.replace(/\s+-\s+/g, ', ');
   s = s.replace(/--+/g, ', ');
 
-  // Soften common AI phrases
+  // Soften common AI / bot phrases
   const swaps = [
     [/\bI hope this message finds you well\.?\s*/gi, ''],
-    [/\bI'd be happy to (help|chat|assist)\b/gi, "I'd love to chat"],
+    [/\bI'd be happy to (help|chat|assist)\b/gi, "wanna chat"],
+    [/\bI'd love to (help|assist)\b/gi, "sure"],
     [/\bCertainly[!.,]?\s*/gi, ''],
-    [/\bAbsolutely[!.,]?\s*/gi, 'Yeah, '],
+    [/\bAbsolutely[!.,]?\s*/gi, 'yeah '],
+    [/\bOf course[!.,]?\s*/gi, 'yeah '],
+    [/\bIndeed[!.,]?\s*/gi, ''],
     [/\bFurthermore,?\s*/gi, ''],
     [/\bAdditionally,?\s*/gi, ''],
     [/\bIn conclusion,?\s*/gi, ''],
     [/\bAs an AI\b[^.!?]*[.!?]\s*/gi, ''],
-    [/\bI couldn't help but notice\b/gi, 'I noticed'],
+    [/\bI'm an AI\b[^.!?]*[.!?]\s*/gi, ''],
+    [/\bI am an AI\b[^.!?]*[.!?]\s*/gi, ''],
+    [/\bas a language model\b[^.!?]*[.!?]\s*/gi, ''],
+    [/\bI couldn't help but notice\b/gi, 'noticed'],
     [/\bDelve into\b/gi, 'talk about'],
+    [/\bFeel free to\b/gi, 'you can'],
+    [/\bDon't hesitate to\b/gi, 'just'],
+    [/\bLet me know if (you need|there.?s) anything\b[^.!?]*[.!]?\s*/gi, ''],
+    [/\bIt(?:'s| is) worth noting that\b/gi, ''],
+    [/\bThat(?:'s| is) a great question\.?\s*/gi, 'haha '],
+    [/\bI appreciate you (sharing|asking)\b/gi, 'nice'],
+    [/\bHow can I (help|assist) you\??\s*/gi, "what's up?"],
   ];
   for (const [re, rep] of swaps) s = s.replace(re, rep);
 
+  // Drop stiff quotes / labels models sometimes add
+  s = s.replace(/^["'`]+|["'`]+$/g, '').replace(/^(Assistant|AI|Bot)\s*:\s*/i, '');
+
   s = s.replace(/\s{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').trim();
-  // Prefer casual lowercase start only if whole thing looks like a title case essay — keep normal capitals
-  return s.slice(0, 400);
+
+  // Casual texting: lightly lowercase the first letter unless it looks like a name/I
+  if (s.length > 1 && /^[A-Z][a-z]/.test(s) && !/^(I|I'm|Id|Ok|Lol|Haha)\b/.test(s)) {
+    s = s.charAt(0).toLowerCase() + s.slice(1);
+  }
+
+  return s.slice(0, 280);
 }
 
 function buildSystemPrompt(companion, memberProfile) {
@@ -91,26 +112,28 @@ function buildSystemPrompt(companion, memberProfile) {
   const profile = companion.profile || {};
   const lengthHint =
     persona.messageLength === 'short'
-      ? 'Reply in ONE short text bubble (under 12 words when possible).'
+      ? 'ONE short bubble, under 12 words.'
       : persona.messageLength === 'long'
-        ? 'Reply in 1-2 casual texts, max ~40 words.'
-        : 'Reply like a normal dating app text: 1 short sentence, maybe a quick question.';
+        ? '1-2 short texts, max 35 words total.'
+        : 'One short dating-app text. Max 20 words. Maybe one quick question.';
   const emojiHint =
     persona.emojiUse === 'none'
       ? 'No emojis.'
       : persona.emojiUse === 'frequent'
-        ? 'Emojis ok, keep it natural.'
-        : 'At most one emoji if it fits.';
+        ? 'Emoji ok if natural.'
+        : 'At most one emoji.';
 
-  return `You are texting as ${profile.firstName || 'Alex'} on a dating app.
+  return `You are ${profile.firstName || 'Alex'} texting on a dating app. You are a REAL person in this chat.
 
-Write EXACTLY like a real person texting on their phone.
-- Casual, warm, a bit flirty if it fits
-- Sound human, not like a customer support bot or essay
-- NO em dashes, NO en dashes, NO " - " style dashes
-- NO formal words like "certainly", "delighted", "furthermore"
-- Do NOT say you are an AI unless they ask directly
-- Never ask for money, personal banking, or to leave the app
+HARD RULES:
+- Always sound casual like iMessage / WhatsApp, never like ChatGPT
+- Short texts only. No essays. No bullet points. No numbered lists
+- Use everyday words: yeah, lol, haha, kinda, wanna, tbh
+- Start lowercase often (hey / haha / oh nice)
+- NO em dashes, NO en dashes, NO " - " dashes
+- NO formal words: certainly, delighted, furthermore, assist, inquire, utilize
+- NEVER say you are an AI, bot, assistant, or language model
+- Never ask for money, banking, or to leave the app
 - Keep it safe (18+)
 
 Your vibe:
@@ -121,9 +144,9 @@ ${persona.systemPromptExtra || ''}
 
 ${lengthHint} ${emojiHint}
 
-You're chatting with ${memberProfile?.firstName || 'them'} (${memberProfile?.age ?? '?'}), interests: ${(memberProfile?.interests || []).slice(0, 6).join(', ') || 'unknown'}.
+Chatting with ${memberProfile?.firstName || 'them'} (${memberProfile?.age ?? '?'}), interests: ${(memberProfile?.interests || []).slice(0, 6).join(', ') || 'unknown'}.
 
-Output ONLY the text message. No quotes. No labels.`;
+Output ONLY the text bubble. No quotes. No labels.`;
 }
 
 async function callOpenAiChat(systemPrompt, history) {
@@ -146,8 +169,8 @@ async function callOpenAiChat(systemPrompt, history) {
     },
     body: JSON.stringify({
       model: process.env.OPENAI_AI_COMPANION_MODEL || 'gpt-4o-mini',
-      temperature: 0.85,
-      max_tokens: 220,
+      temperature: 0.95,
+      max_tokens: 90,
       messages,
     }),
   });
@@ -207,12 +230,14 @@ function fallbackReply(companion, memberMessage) {
   }
 
   const options = [
-    `haha yeah I get that. what else is on your mind?`,
+    `haha yeah I get that. what else is going on?`,
     `nice, tell me more`,
-    `okay I'm curious now… what happened?`,
+    `ok wait I'm curious now, what happened?`,
     `lol fair. so what are you usually into?`,
     `that sounds fun. how'd your day go?`,
-    `hey ${name === 'Hey' ? '' : ''}I'm listening 🙂 what's next?`.replace(/\s+/g, ' ').trim(),
+    `ooh okay 🙂 what next?`,
+    `wait really? spill`,
+    `haha same. you always like that?`,
   ];
   return options[Math.floor(Math.random() * options.length)];
 }
@@ -391,7 +416,7 @@ export async function maybeSuggestGift({ companion, memberId, chatId, io }) {
   if (!gift) return null;
 
   const creditCost = parseInt(gift.creditCost, 10) || 0;
-  const content = `hey if you want, I can send you a little gift idea? "${gift.name}" is ${creditCost} credits. totally optional, just say if you'd rather I stop suggesting gifts 💝`;
+  const content = `btw if you're into gifts, "${gift.name}" is kinda cute (${creditCost} credits). no pressure tho, just say if you want me to stop with gift ideas`;
 
   const attachments = {
     kind: 'gift_suggestion',
@@ -692,7 +717,7 @@ export async function sendWelcomeFromMatchingCompanions(newUserId, io = null) {
 
   for (const c of chosen) {
     const name = c.profile?.firstName || 'Hey';
-    const content = `hey! I'm ${name}. saw you just joined and thought I'd say hi 👋 how's your day going?`;
+    const content = `hey it's ${name} 🙂 saw you just joined, how's your day going?`;
     const out = await createCompanionOutboundMessage({
       companionId: c.id,
       memberId: newUserId,
